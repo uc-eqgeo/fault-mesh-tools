@@ -1,0 +1,8 @@
+Note:   To test the transformations, you need to first run the global to local
+        transformations first, since the inverse test uses those results to
+        transform back. You can run the tests by doing:
+
+./test_global_to_local_multi.sh
+./test_global_to_local_single.sh
+./test_local_to_global_multi.sh
+./test_local_to_global_single.sh

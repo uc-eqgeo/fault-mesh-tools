@@ -36,7 +36,7 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
                                                             resolution=resolution, num_search_tris=num_search_tris)
 
     # Convert to global coordinates.
-    (mesh_points_global, edges_global) = fault_local_to_global(mesh_points_local, edges_local, rotation_matrix, plane_origin)
+    (mesh_points_global, edges_global) = fault_local_to_global(mesh_points_local, rotation_matrix, plane_origin, edges=edges_local)
 
     # Create dictionary of results.
     fault_mesh_info = {'plane_normal': plane_normal,
