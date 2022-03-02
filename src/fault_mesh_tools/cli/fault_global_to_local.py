@@ -31,8 +31,8 @@ def convertFile(inFile, outRoot):
     along with metadata (in a pickle file).
     """
 
-    outStl = str(outRoot) + '_local.stl'
-    outMD = str(outRoot) + '_local.pkl'
+    outStl = outRoot.with_suffix(stlSuffix)
+    outMD = outRoot.with_suffix(mdSuffix)
     
     # Read VTK file.
     vtk = meshio.read(inFile)
@@ -61,14 +61,19 @@ def convertFile(inFile, outRoot):
     return
     
 
-def convertDir(inPath, outPath):
+def convertDir(inPath, outPath, inQualifier, outQualifier):
     """
     Function to convert a directory of VTK files to STL files in local coordinates.
     """
     vtkFiles = sorted(inPath.glob(vtkSearch))
     for vtkFile in vtkFiles:
-        stem = vtkFile.stem
-        outRoot = Path.joinpath(outPath, stem)
+        inStem = vtkFile.stem
+        outStem = inStem
+        if (inQualifier):
+            outStem = inStem.replace(inQualifier, outQualifier)
+        elif (outQualifier):
+            outStem = inStem + outQualifier
+        outRoot = Path.joinpath(outPath, outStem)
         convertFile(vtkFile, outRoot)
 
     return
@@ -81,14 +86,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Convert one or more VTK files to STL files in local coordinates.')
     parser.add_argument("-i", "--in_files", action="store", 
                         dest="inFiles", required=True, help="input file or directory")
+    parser.add_argument("-iq", "--in_qualifier", action="store", 
+                        dest="inQualifier", default=None, help="additional input filename qualifier following unique string")
     parser.add_argument("-o", "--out_directory", action="store", 
                         dest="outDirectory", required=True, help="output directory")
+    parser.add_argument("-oq", "--out_qualifier", action="store", 
+                        dest="outQualifier", default="_local", help="additional output filename qualifier following unique string")
 
     args = parser.parse_args()
 
     inPath = Path(args.inFiles)
     outDir = Path(args.outDirectory)
     outDir.mkdir(parents=True, exist_ok=True)
+    inQualifier = args.inQualifier
+    outQualifier = args.outQualifier
 
     # Case 1:  Convert single file.
     if (inPath.is_file()):
@@ -97,11 +108,16 @@ if __name__ == "__main__":
         if (inSuff != vtkSuffix):
             msg = 'Only VTK (*.vtk) files are allowed as input.'
             raise ValueError(msg)
-        outPath = Path.joinpath(outDir, inStem)
+        outStem = inStem
+        if (inQualifier):
+            outStem = inStem.replace(inQualifier, outQualifier)
+        elif (outQualifier):
+            outStem = inStem + outQualifier
+        outPath = Path.joinpath(outDir, outStem)
         convertFile(inPath, outPath)
     # Case 2:  Convert directory.
     elif (inPath.is_dir()):
-        convertDir(inPath, outDir)
+        convertDir(inPath, outDir, inQualifier, outQualifier)
     # Case 3:  Give up.
     else:
         msg = 'Unable to find %s.' % inPath

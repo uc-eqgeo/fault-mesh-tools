@@ -54,7 +54,7 @@ def convertFile(inStl, inMD, outFile):
     return
     
 
-def convertDir(inPath, outPath):
+def convertDir(inPath, outPath, inQualifier, outQualifier):
     """
     Function to convert a directory of STL files to STL files in global coordinates.
     """
@@ -66,9 +66,13 @@ def convertDir(inPath, outPath):
     for fileNum in range(len(inStl)):
         stlIn = inStl[fileNum]
         MDIn = inMD[fileNum]
-        stem = stlIn.stem
-        stemNew = stem.replace('_local', '_global')
-        outRoot = Path.joinpath(outPath, stemNew)
+        inStem = stlIn.stem
+        outStem = inStem
+        if (inQualifier):
+            outStem = inStem.replace(inQualifier, outQualifier)
+        elif (outQualifier):
+            outStem = inStem + outQualifier
+        outRoot = Path.joinpath(outPath, outStem)
         outFile = outRoot.with_suffix(stlSuffix)
         convertFile(stlIn, MDIn, outFile)
 
@@ -82,8 +86,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Convert one or more STL files in local coordinates to global coordinates.')
     parser.add_argument("-i", "--in_root", action="store", 
                         dest="inRoot", required=True, help="input root filename or directory")
+    parser.add_argument("-iq", "--in_qualifier", action="store", 
+                        dest="inQualifier", default=None, help="additional input filename qualifier following unique string")
     parser.add_argument("-o", "--out_directory", action="store", 
                         dest="outDirectory", required=True, help="output directory")
+    parser.add_argument("-oq", "--out_qualifier", action="store", 
+                        dest="outQualifier", default="_global", help="additional output filename qualifier following unique string")
 
     args = parser.parse_args()
 
@@ -91,6 +99,8 @@ if __name__ == "__main__":
     testPath = inRoot.with_suffix(stlSuffix)
     outDir = Path(args.outDirectory)
     outDir.mkdir(parents=True, exist_ok=True)
+    inQualifier = args.inQualifier
+    outQualifier = args.outQualifier
 
     # Case 1:  Convert single file.
     if (testPath.is_file()):
@@ -100,13 +110,17 @@ if __name__ == "__main__":
         if (inSuff != stlSuffix):
             msg = 'Only STL (*.stl) files are allowed as input.'
             raise ValueError(msg)
-        outStem = inStem.replace('_local', '_global')
+        outStem = inStem
+        if (inQualifier):
+            outStem = inStem.replace(inQualifier, outQualifier)
+        elif (outQualifier):
+            outStem = inStem + outQualifier
         outPath = Path.joinpath(outDir, outStem)
         outFile = outPath.with_suffix(stlSuffix)
         convertFile(testPath, inMD, outFile)
     # Case 2:  Convert directory.
     elif (inRoot.is_dir()):
-        convertDir(inRoot, outDir)
+        convertDir(inRoot, outDir, inQualifier, outQualifier)
     # Case 3:  Give up.
     else:
         msg = 'Unable to find %s.' % inPath
