@@ -82,6 +82,41 @@ def fit_plane_to_points(points: np.ndarray, eps: float=1.0e-5):
     return (plane_normal, plane_origin)
 
 
+def axis_angle_from_rotation_matrix(rotation_matrix: np.ndarray, eps: float=1.0e-6):
+    """
+    Compute rotation axis and angle of rotation from a rotation matrix.
+    """
+    (eig_vals, eig_vecs) = np.linalg.eig(rotation_matrix)
+    # Need to determine whether this will always work (the eigenvalue might be complex and/or not quite == 1).
+    col_num = np.where(eig_vals == 1.0)
+    rot_axis = np.real_if_close(eig_vecs[:,col_num].reshape(3,1)).reshape(3)
+
+    # Determine absolute value of rotation angle.
+    trace = np.trace(rotation_matrix)
+    abs_ang = np.arccos(0.5*(trace - 1.0))
+
+    # Test rotation direction
+    test_vec = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    rot_vec = np.dot(rotation_matrix, test_vec)
+    ca = np.cos(abs_ang)
+    sa = np.sin(abs_ang)
+    rot_test = ca*test_vec + sa*np.cross(rot_axis, test_vec) + (1.0 - ca)*np.dot(rot_axis, test_vec)*rot_axis
+    diff = rot_vec - rot_test
+    if (np.linalg.norm(diff) < eps):
+        ang = abs_ang
+    else:
+        ang = -abs_ang
+        ca = np.cos(ang)
+        sa = np.sin(ang)
+        rot_test = ca*test_vec + sa*np.cross(rot_axis, test_vec) + (1.0 - ca)*np.dot(rot_axis, test_vec)*rot_axis
+        diff = rot_vec - rot_test
+        if (np.linalg.norm(diff) >= eps):
+            msg = 'Unable to find rotation angle.'
+            raise ValueError(msg)
+        
+    return (rot_axis, ang)
+                                                                                          
+
 def get_fault_rotation_matrix(plane_normal: np.ndarray, cutoff_vecmag: float = 0.98):
     """
     Compute rotation matrix, given the normal to the plane. If the normal is nearly
