@@ -87,8 +87,7 @@ def axis_angle_from_rotation_matrix(rotation_matrix: np.ndarray, eps: float=1.0e
     Compute rotation axis and angle of rotation from a rotation matrix.
     """
     (eig_vals, eig_vecs) = np.linalg.eig(rotation_matrix)
-    # Need to determine whether this will always work (the eigenvalue might be complex and/or not quite == 1).
-    col_num = np.where(eig_vals == 1.0)
+    col_num = np.where(np.abs(np.real(eig_vals) - 1.0) < eps)
     rot_axis = np.real_if_close(eig_vecs[:,col_num].reshape(3,1)).reshape(3)
 
     # Determine absolute value of rotation angle.
