@@ -1,8 +1,19 @@
 Note:   To test the transformations, you need to first run the global to local
         transformations first, since the inverse test uses those results to
-        transform back. You can run the tests by doing:
+        transform back. They are also needed to perform the Cubit tests.
+        You can run the tests by doing:
 
 ./test_global_to_local_multi.sh
 ./test_global_to_local_single.sh
 ./test_local_to_global_multi.sh
 ./test_local_to_global_single.sh
+./test_local_to_cubit_global_multi.sh
+./test_local_to_cubit_global_single.sh
+./test_local_to_cubit_local_multi.sh
+./test_local_to_cubit_local_single.sh
+
+After running the tests, you can generate the meshes using Cubit by moving
+into one of the Cubit output directories, e.g.,
+../data/cfm-multi-global-cubit. For multi-fault tests, a master journal
+file is created (master_local_to_cubit.jou). All of the fault meshes
+may be generated within Cubit by just running this file.

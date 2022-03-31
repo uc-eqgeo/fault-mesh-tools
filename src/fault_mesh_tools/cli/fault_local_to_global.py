@@ -8,7 +8,7 @@ STL file.
 
 # The code requires numpy, pathlib, argparse, sys, pickle, meshio,
 # and the fault_mesh_tools.meshops package.
-import numpy
+import numpy as np
 
 from pathlib import Path
 import argparse
@@ -20,13 +20,13 @@ import meshio
 from fault_mesh_tools.meshops import meshops
 
 # File suffixes and search string.
-stlSuffix = '.stl'
-stlSearch = '*' + stlSuffix
-mdSuffix = '.pkl'
-mdSearch = '*' + mdSuffix
+stl_suffix = '.stl'
+stl_search = '*' + stl_suffix
+md_suffix = '.pkl'
+md_search = '*' + md_suffix
 
 # ----------------------------------------------------------------------
-def convertFile(inStl, inMD, outFile):
+def convert_file(in_stl, in_md, out_file):
     """
     Function to read a STL file in local coordinates,
     along with metadata (in a pickle file), and generate an output STL
@@ -34,12 +34,12 @@ def convertFile(inStl, inMD, outFile):
     """
 
     # Read STL and metadata files.
-    stl = meshio.read(inStl)
+    stl = meshio.read(in_stl)
     points = stl.points
     cells = stl.cells
 
     # Get rotation matrix and origin.
-    f = open(inMD, 'rb')
+    f = open(in_md, 'rb')
     pl = pickle.load(f)
     f.close()
     rotation_matrix = meshops.get_fault_rotation_matrix(pl['plane_normal'], cutoff_vecmag=0.98)
@@ -49,32 +49,34 @@ def convertFile(inStl, inMD, outFile):
 
     # Write mesh as STL file.
     mesh = meshio.Mesh(points_global, cells)
-    meshio.write(outFile, mesh)
+    meshio.write(out_file, mesh)
 
     return
     
 
-def convertDir(inPath, outPath, inQualifier, outQualifier):
+def convert_dir(in_path, out_path, in_qualifier, out_qualifier, verbose):
     """
     Function to convert a directory of STL files to STL files in global coordinates.
     """
-    inStl = sorted(inPath.glob(stlSearch))
-    inMD = sorted(inPath.glob(mdSearch))
-    if (len(inStl) != len(inMD)):
+    in_stl = sorted(in_path.glob(stl_search))
+    in_md = sorted(in_path.glob(md_search))
+    if (len(in_stl) != len(in_md)):
         msg = 'Number of input STL files does not match number of input metadata files.'
         raise ValueError(msg)
-    for fileNum in range(len(inStl)):
-        stlIn = inStl[fileNum]
-        MDIn = inMD[fileNum]
-        inStem = stlIn.stem
-        outStem = inStem
-        if (inQualifier):
-            outStem = inStem.replace(inQualifier, outQualifier)
-        elif (outQualifier):
-            outStem = inStem + outQualifier
-        outRoot = Path.joinpath(outPath, outStem)
-        outFile = outRoot.with_suffix(stlSuffix)
-        convertFile(stlIn, MDIn, outFile)
+    for file_num in range(len(in_stl)):
+        stl_in = in_stl[file_num]
+        md_in = in_md[file_num]
+        in_stem = stl_in.stem
+        out_stem = in_stem
+        if (verbose):
+            print("Input file:  %s" % in_stem)
+        if (in_qualifier):
+            out_stem = in_stem.replace(in_qualifier, out_qualifier)
+        elif (out_qualifier):
+            out_stem = in_stem + out_qualifier
+        out_root = Path.joinpath(out_path, out_stem)
+        out_file = out_root.with_suffix(stl_suffix)
+        convert_file(stl_in, md_in, out_file)
 
     return
 
@@ -87,42 +89,45 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--in_root", action="store", 
                         dest="inRoot", required=True, help="input root filename or directory")
     parser.add_argument("-iq", "--in_qualifier", action="store", 
-                        dest="inQualifier", default=None, help="additional input filename qualifier following unique string")
+                        dest="in_qualifier", default=None, help="additional input filename qualifier following unique string")
     parser.add_argument("-o", "--out_directory", action="store", 
-                        dest="outDirectory", required=True, help="output directory")
+                        dest="out_directory", required=True, help="output directory")
     parser.add_argument("-oq", "--out_qualifier", action="store", 
-                        dest="outQualifier", default="_global", help="additional output filename qualifier following unique string")
+                        dest="out_qualifier", default="_global", help="additional output filename qualifier following unique string")
+    parser.add_argument("-v", "--verbose", action="store_true", 
+                        dest="verbose", default=False, help="verbose output for directories")
 
     args = parser.parse_args()
 
     inRoot = Path(args.inRoot)
-    testPath = inRoot.with_suffix(stlSuffix)
-    outDir = Path(args.outDirectory)
+    testPath = inRoot.with_suffix(stl_suffix)
+    outDir = Path(args.out_directory)
     outDir.mkdir(parents=True, exist_ok=True)
-    inQualifier = args.inQualifier
-    outQualifier = args.outQualifier
+    in_qualifier = args.in_qualifier
+    out_qualifier = args.out_qualifier
+    verbose = args.verbose
 
     # Case 1:  Convert single file.
     if (testPath.is_file()):
         inSuff = testPath.suffix
-        inStem = testPath.stem
-        inMD = inRoot.with_suffix(mdSuffix)
-        if (inSuff != stlSuffix):
+        in_stem = testPath.stem
+        in_md = inRoot.with_suffix(md_suffix)
+        if (inSuff != stl_suffix):
             msg = 'Only STL (*.stl) files are allowed as input.'
             raise ValueError(msg)
-        outStem = inStem
-        if (inQualifier):
-            outStem = inStem.replace(inQualifier, outQualifier)
-        elif (outQualifier):
-            outStem = inStem + outQualifier
-        outPath = Path.joinpath(outDir, outStem)
-        outFile = outPath.with_suffix(stlSuffix)
-        convertFile(testPath, inMD, outFile)
+        out_stem = in_stem
+        if (in_qualifier):
+            out_stem = in_stem.replace(in_qualifier, out_qualifier)
+        elif (out_qualifier):
+            out_stem = in_stem + out_qualifier
+        out_path = Path.joinpath(outDir, out_stem)
+        out_file = out_path.with_suffix(stl_suffix)
+        convert_file(testPath, in_md, out_file)
     # Case 2:  Convert directory.
     elif (inRoot.is_dir()):
-        convertDir(inRoot, outDir, inQualifier, outQualifier)
+        convert_dir(inRoot, outDir, in_qualifier, out_qualifier, verbose)
     # Case 3:  Give up.
     else:
-        msg = 'Unable to find %s.' % inPath
+        msg = 'Unable to find %s.' % in_path
         raise ValueError(msg)
     
