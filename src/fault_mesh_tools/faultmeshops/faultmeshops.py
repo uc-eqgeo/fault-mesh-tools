@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.spatial
-import shapely as shp
+import shapely.geometry as shpgeom
 import os
 
 def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray, resolution: float=5000.0,
@@ -438,8 +438,8 @@ def find_projected_coords(tri_coord, point):
     """
     x_point = point[0]
     y_point = point[1]
-    point_plane = shp.geometry.Point(x_point, y_point)
-    polygon = shp.geometry.Polygon(tri_coord[:,0:2])
+    point_plane = shpgeom.Point(x_point, y_point)
+    polygon = shpgeom.Polygon(tri_coord[:,0:2])
     in_tri = polygon.intersects(point_plane)
     projected_coords = None
 
