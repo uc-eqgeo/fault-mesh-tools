@@ -6,7 +6,7 @@ with a different resolution. Output is a STL file.
 """
 
 # The code requires numpy, pathlib, argparse, sys, pickle, meshio,
-# and the fault_mesh_tools.meshops package.
+# and the fault_mesh_tools.faultmeshops package.
 import numpy as np
 
 from pathlib import Path
@@ -16,7 +16,7 @@ import pickle
 
 import meshio
 
-from fault_mesh_tools.meshops import meshops
+from fault_mesh_tools.faultmeshops import faultmeshops
 
 # File suffixes and search string.
 stl_suffix = '.stl'

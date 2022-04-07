@@ -7,7 +7,7 @@ STL file.
 """
 
 # The code requires numpy, pathlib, argparse, sys, pickle, meshio,
-# and the fault_mesh_tools.meshops package.
+# and the fault_mesh_tools.faultmeshops package.
 import numpy as np
 
 from pathlib import Path
@@ -17,7 +17,7 @@ import pickle
 
 import meshio
 
-from fault_mesh_tools.meshops import meshops
+from fault_mesh_tools.faultmeshops import faultmeshops
 
 # File suffixes and search string.
 stl_suffix = '.stl'
@@ -42,10 +42,10 @@ def convert_file(in_stl, in_md, out_file):
     f = open(in_md, 'rb')
     pl = pickle.load(f)
     f.close()
-    rotation_matrix = meshops.get_fault_rotation_matrix(pl['plane_normal'], cutoff_vecmag=0.98)
+    rotation_matrix = faultmeshops.get_fault_rotation_matrix(pl['plane_normal'], cutoff_vecmag=0.98)
 
     # Global coordinates.
-    (points_global, edges_global) = meshops.fault_local_to_global(points, rotation_matrix, pl['plane_origin'])
+    (points_global, edges_global) = faultmeshops.fault_local_to_global(points, rotation_matrix, pl['plane_origin'])
 
     # Write mesh as STL file.
     mesh = meshio.Mesh(points_global, cells)

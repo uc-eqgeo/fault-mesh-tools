@@ -6,7 +6,7 @@ output as a STL file, along with coordinate conversion metadata.
 """
 
 # The code requires numpy, pathlib, argparse, sys, pickle, meshio,
-# and the fault_mesh_tools.meshops package.
+# and the fault_mesh_tools.faultmeshops package.
 import numpy as np
 
 from pathlib import Path
@@ -16,7 +16,7 @@ import pickle
 
 import meshio
 
-from fault_mesh_tools.meshops import meshops
+from fault_mesh_tools.faultmeshops import faultmeshops
 
 # File suffixes and search string.
 vtk_suffix = '.vtk'
@@ -40,12 +40,12 @@ def convert_file(in_file, out_root):
     cells = vtk.cells
 
     # Get best-fit plane through points and rotation matrix.
-    (plane_normal, plane_origin) = meshops.fit_plane_to_points(points, eps=1.0e-5)
-    rotation_matrix = meshops.get_fault_rotation_matrix(plane_normal, cutoff_vecmag=0.98)
-    (rotation_axis, rotation_angle) = meshops.axis_angle_from_rotation_matrix(rotation_matrix)
+    (plane_normal, plane_origin) = faultmeshops.fit_plane_to_points(points, eps=1.0e-5)
+    rotation_matrix = faultmeshops.get_fault_rotation_matrix(plane_normal, cutoff_vecmag=0.98)
+    (rotation_axis, rotation_angle) = faultmeshops.axis_angle_from_rotation_matrix(rotation_matrix)
     
     # Local coordinates.
-    (points_local, edges_local, fault_is_plane) = meshops.fault_global_to_local(points, rotation_matrix, plane_origin)
+    (points_local, edges_local, fault_is_plane) = faultmeshops.fault_global_to_local(points, rotation_matrix, plane_origin)
 
     # Write coordinate info to pickle file.
     surface_info = {"plane_normal": plane_normal,
