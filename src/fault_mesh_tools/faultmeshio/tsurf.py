@@ -133,16 +133,42 @@ class tsurf(object):
             # Read points and cells
             if not next(infile).startswith('TFACE'):
                 raise IOError('Only "TFACE" format TSurf files are supported')
-            points, cellArray = [], []
+            point_num, points, cellArray = [], [], []
             for line in infile:
                 line = line.strip().split()
                 if line[0] in ['VRTX', 'PVRTX']:
+                    point_num.append(int(line[1]))
                     points.append([float(item) for item in line[2:5]])
                 elif line[0] == 'TRGL':
                     cellArray.append([int(item)-1 for item in line[1:]])
         self.x, self.y, self.z = zip(*points)
+        point_num = np.array(point_num, dtype=np.int64) - 1
         points = np.array(points, dtype=np.float64)
         cellArray = np.array(cellArray, dtype=np.int64)
+
+        # See if there are undefined vertices. If so, adjust arrays accordingly.
+        num_points = points.shape[0]
+        point_num_max = np.amax(point_num) + 1
+        if (point_num_max > num_points):
+            diff_arr = np.diff(point_num, prepend=-1)
+            skip_arr = np.where(diff_arr > 1)[0]
+            num_skips = skip_arr.shape[0]
+            for skip_vertex in skip_arr:
+                skip_val = diff_arr[skip_vertex] - 1
+                shift_inds = np.where(cellArray > skip_vertex - 1)
+                cellArray[shift_inds] -= skip_val
+            
+        elif (point_num_max < num_points):
+            msg = 'Number of defined vertices is less than the number of listed points.'
+            raise ValueError(msg)
+        
+        # Check that cell array does not refer to undefined vertices. If so, delete those triangles.
+        # Maybe we should print a warning here?
+        max_ref_point =np.amax(cellArray)
+        if (max_ref_point >= num_points):
+            bad_tris = np.where(cellArray >= num_points)
+            cellArray = np.delete(cellArray, bad_tris[0], axis=0)
+            print("Bad triangles found in Tsurf.")
         cells = [("triangle", cellArray)]
         self.mesh = meshio.Mesh(points, cells)
 
@@ -150,7 +176,7 @@ class tsurf(object):
     def triangles(self):
         triangle_numbers = self.mesh.cells[0].data
         vertex_dic = {i:vertex for i, vertex in enumerate(self.mesh.points)}
-        triangle_array = numpy.array([numpy.hstack([vertex_dic[i] for i in triangle]) for triangle in triangle_numbers])
+        triangle_array = np.array([np.hstack([vertex_dic[i] for i in triangle]) for triangle in triangle_numbers])
         return np.unique(triangle_array, axis=0)
 
 
