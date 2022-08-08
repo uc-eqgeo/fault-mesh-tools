@@ -131,8 +131,17 @@ class tsurf(object):
                 self.AXIS_UNIT = self.default_AXIS_UNIT
 
             # Read points and cells
-            if not next(infile).startswith('TFACE'):
-                raise IOError('Only "TFACE" format TSurf files are supported')
+            num_lines = 2
+            # Number of header lines is variable between MOVE and leapfrog tsurf
+            # Search for "TFACE" up to line 20
+            while not line.startswith('TFACE'):
+                line = next(infile).strip()
+                if num_lines < 20:
+                    num_lines += 1
+                else:
+                    # If 20 header lines and still no TFACE, give up and throw error
+                    raise IOError('Only "TFACE" format TSurf files are supported ("TFACE" not in first 20 lines)')
+
             point_num, points, cellArray = [], [], []
             for line in infile:
                 line = line.strip().split()
