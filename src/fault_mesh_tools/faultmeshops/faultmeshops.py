@@ -3,9 +3,10 @@ import scipy.spatial
 import shapely.geometry as shpgeom
 import os
 
-def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray, resolution: float=5000.0,
-                                num_search_tris: int=10, fit_plane_epsilon: float=1.0e-5, cutoff_rotation_vecmag: float=0.98,
-                                is_plane_epsilon: float=1.0):
+def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray,
+                                plane_type: str='all_points', resolution: float=5000.0,
+                                num_search_tris: int=10, fit_plane_epsilon: float=1.0e-5,
+                                cutoff_rotation_vecmag: float=0.98, is_plane_epsilon: float=1.0):
     """
     Create a quad mesh, given triangular mesh information.
     Returned values are all in the fault_mesh_info dictionary:
@@ -22,7 +23,7 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
         mesh_points_global: The generated mesh points (structured mesh) in global coordinates
     """
     # Get coordinate transformation information.
-    (plane_normal, plane_origin) = fit_plane_to_points(points, eps=fit_plane_epsilon)
+    (plane_normal, plane_origin) = fit_plane_to_points(points, triangles, plane_type=plane_type, eps=fit_plane_epsilon)
     rotation_matrix = get_fault_rotation_matrix(plane_normal, cutoff_vecmag=cutoff_rotation_vecmag)
 
     # Get local coordinates.
@@ -36,7 +37,8 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
                                                             resolution=resolution, num_search_tris=num_search_tris)
 
     # Convert to global coordinates.
-    (mesh_points_global, edges_global) = fault_local_to_global(mesh_points_local, rotation_matrix, plane_origin, edges=edges_local)
+    (mesh_points_global,
+     edges_global) = fault_local_to_global(mesh_points_local, rotation_matrix, plane_origin, edges=edges_local)
 
     # Create dictionary of results.
     fault_mesh_info = {'plane_normal': plane_normal,
@@ -54,7 +56,8 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
     return fault_mesh_info
 
     
-def fit_plane_to_points(points: np.ndarray, eps: float=1.0e-5):
+def fit_plane_to_points(points: np.ndarray, cells: np.ndarray=None, plane_type: str='all_points',
+                        create_mesh: bool=False, eps: float=1.0e-5):
     """
     Find best-fit plane through a set of points, after first insuring the plane goes through
     the mean (centroid) of all the points in the array. This is probably better than my
@@ -65,8 +68,20 @@ def fit_plane_to_points(points: np.ndarray, eps: float=1.0e-5):
         plane_origin:  Point on plane that may be considered as the plane origin
     """
     # Compute plane origin and subract it from the points array.
-    plane_origin = np.mean(points, axis=0)
-    x = points - plane_origin
+    if plane_type == 'all_points':
+        plane_origin = np.mean(points, axis=0)
+        x = points - plane_origin
+    elif plane_type == 'edges':
+        edge_inds = get_mesh_boundary(cells)
+        edges = points[edge_inds,:]
+        plane_origin = np.mean(edges, axis=0)
+        x = edges - plane_origin
+    elif plane_type == 'corners':
+        edge_inds = get_mesh_boundary(cells)
+        edges = points[edge_inds,:]
+        corners = find_corners(edges)
+        plane_origin = np.mean(corners, axis=0)
+        x = corners - plane_origin
 
     # Dot product to yield a 3x3 array.
     moment = np.dot(x.T, x)
@@ -78,6 +93,20 @@ def fit_plane_to_points(points: np.ndarray, eps: float=1.0e-5):
     plane_normal /= np.linalg.norm(plane_normal)
     if (plane_normal[-1] < 0.0):
         plane_normal *= -1.0
+
+    if (create_mesh):
+        msg = 'create_mesh not implemented'
+        raise NotImplementedError(msg)
+    """
+    # Not sure why I was originally going to do this, but I've left the comments in case I decide it's useful.
+    plane_mesh = None
+    if (create_mesh):
+        #********* Finish fixing from here. Get dimensions from cdist max, then:
+        #  1.  Get two vectors orthonormal to plane_normal (does numpy have a null function?).
+        #  2.  Get Cartesian coordinates relative to plane_origin.
+
+    return (plane_normal, plane_origin, plane_mesh)
+    """
 
     return (plane_normal, plane_origin)
 
@@ -187,6 +216,29 @@ def fault_local_to_global(points: np.ndarray, rotation_matrix: np.ndarray, plane
     return (points_global, edges_global)
     
     
+def find_corners(edges: np.ndarray, num_corners: int=4):
+    """
+    Find 'corners' of a mesh, given the edges. They are simply determined by finding the smallest
+    dot products of the edge segments with each other.
+    """
+    # Create vectors of line segments composing outer edges.
+    num_points = edges.shape[0]
+    v1 = np.diff(edges[:,0:2], axis=0, append=edges[1,0:2].reshape(1,2))
+    v2 = np.diff(edges[:,0:2], axis=0, prepend=edges[-2,0:2].reshape(1,2))
+    v1 /= np.linalg.norm(v1, axis=1).reshape(num_points, 1)
+    v2 /= np.linalg.norm(v2, axis=1).reshape(num_points, 1)
+
+    # Compute dot product magnitude and sorting index array.
+    # Last point is left out since it has already been included.
+    dot_prod_mag = np.abs(np.sum(v1*v2, axis=1))[:-1]
+    sort_args = np.argsort(dot_prod_mag)
+
+    # Determine which coordinates correspond to each corner.
+    corners = edges[sort_args[0:num_corners],:]
+
+    return corners
+
+
 def get_quad_mesh_edges(edges: np.ndarray, corner_separation: float=3000.0):
     """
     Determine 4 sets of edges, assuming a semi-quadrilateral layout.
@@ -199,20 +251,9 @@ def get_quad_mesh_edges(edges: np.ndarray, corner_separation: float=3000.0):
         bottom_edge: Coordinates of edge corresponding to bottommost edge
         top_edge: Coordinates of edge corresponding to topmost edge
     """
-    # Create vectors of line segments composing outer edges.
-    num_points = edges.shape[0]
-    v1 = np.diff(edges[:,0:2], axis=0, append=edges[1,0:2].reshape(1,2))
-    v2 = np.diff(edges[:,0:2], axis=0, prepend=edges[-2,0:2].reshape(1,2))
-    v1 /= np.linalg.norm(v1, axis=1).reshape(num_points, 1)
-    v2 /= np.linalg.norm(v2, axis=1).reshape(num_points, 1)
-
-    # Compute dot product magnitude and sorting index array.
-    dot_prod_mag = np.abs(np.sum(v1*v2, axis=1))
-    sort_args = np.argsort(dot_prod_mag)
-
     # Everything below here is pretty kludgy and should be tidied up.
     # Determine which coordinates correspond to each corner.
-    corners = edges[sort_args[0:4],:]
+    corners = find_corners(edges)
     x_sort = np.argsort(corners[:,0])
     left_corners = corners[x_sort[0:2], :]
     right_corners = corners[x_sort[2:], :]
@@ -228,10 +269,14 @@ def get_quad_mesh_edges(edges: np.ndarray, corner_separation: float=3000.0):
         br_corner = right_corners[0,:]
 
     # Get corner indices.
-    ul_ind = sort_args[np.argmin(np.linalg.norm(corners - ul_corner, axis=1))]
-    bl_ind = sort_args[np.argmin(np.linalg.norm(corners - bl_corner, axis=1))]
-    ur_ind = sort_args[np.argmin(np.linalg.norm(corners - ur_corner, axis=1))]
-    br_ind = sort_args[np.argmin(np.linalg.norm(corners - br_corner, axis=1))]
+    # ul_ind = sort_args[np.argmin(np.linalg.norm(edges - ul_corner, axis=1))]
+    # bl_ind = sort_args[np.argmin(np.linalg.norm(edges - bl_corner, axis=1))]
+    # ur_ind = sort_args[np.argmin(np.linalg.norm(edges - ur_corner, axis=1))]
+    # br_ind = sort_args[np.argmin(np.linalg.norm(edges - br_corner, axis=1))]
+    ul_ind = np.argmin(np.linalg.norm(edges - ul_corner, axis=1))
+    bl_ind = np.argmin(np.linalg.norm(edges - bl_corner, axis=1))
+    ur_ind = np.argmin(np.linalg.norm(edges - ur_corner, axis=1))
+    br_ind = np.argmin(np.linalg.norm(edges - br_corner, axis=1))
     ind_min = min(ul_ind, bl_ind, ur_ind, br_ind)
     ind_max = max(ul_ind, bl_ind, ur_ind, br_ind)
 
@@ -327,7 +372,7 @@ def create_local_grid(points: np.ndarray, edge_sides: dict, triangles: np.ndarra
     # We need to do this for points on the boundary, which might fall outside a mesh triangle.
     if not(fault_is_plane):
         z = np.zeros((num_vert_points, num_horiz_points), dtype=np.float64)
-        is_mesh_edge = np.zeros((num_vert_points, num_horiz_points), dtype=np.bool)
+        is_mesh_edge = np.zeros((num_vert_points, num_horiz_points), dtype=bool)
         is_mesh_edge[0,:] = True
         is_mesh_edge[-1,:] = True
         is_mesh_edge[:,0] = True
@@ -365,7 +410,7 @@ def create_cells_from_dims(num_verts_x: int, num_verts_y: int):
     num_cells_x = num_verts_x - 1
     num_cells_y = num_verts_y - 1
     num_cells = num_cells_x*num_cells_y
-    cell_array = np.zeros((num_cells, 4), dtype=np.int)
+    cell_array = np.zeros((num_cells, 4), dtype=np.int64)
     cell_num = 0
 
     # I am sure this could be done in a more efficient way.
@@ -400,12 +445,14 @@ def tri_interpolate_zcoords(points: np.ndarray, triangles: np.ndarray, mesh_poin
     z = np.zeros(num_mesh_points, dtype=np.float64)
     for point_num in range(num_mesh_points):
         if not(is_mesh_edge[point_num]):
-            z[point_num] = project_2d_coords(tri_coords, coords2d[point_num,:], tri_tree, num_search_tris=num_search_tris)
+            z[point_num] = project_2d_coords(tri_coords, coords2d[point_num,:], tri_tree,
+                                             num_search_tris=num_search_tris)
 
     return z
 
 
-def project_2d_coords(tri_coords: np.ndarray, coord: np.ndarray, tree: scipy.spatial.ckdtree.cKDTree, num_search_tris: int=10):
+def project_2d_coords(tri_coords: np.ndarray, coord: np.ndarray, tree: scipy.spatial.ckdtree.cKDTree,
+                      num_search_tris: int=10):
     """
     Project z-coordinate for triangle coordinates.
     Returned values are:
@@ -447,7 +494,7 @@ def find_projected_coords(tri_coord, point):
     # compute projected coordinates.
     # If we want to do a check we could either:
     # 1.  Make sure that alpha, beta, and gamma are all between 0 and 1.
-    # 2.  Make sure that projected_coords[0 and projected_coords[1] are equal to
+    # 2.  Make sure that projected_coords[0] and projected_coords[1] are equal to
     #     the original point coordinates.
     if (in_tri):
         u = tri_coord[1,0:2] - tri_coord[0,0:2]
@@ -483,7 +530,7 @@ def get_mesh_boundary(triangles):
 
     # Get unique edges that are only present once.
     (uniq, uniq_ids, counts) = np.unique(edge_sort, axis=0, return_index=True, return_counts=True)
-    edge_inds = np.arange(edge_sort.shape[0], dtype=np.int)
+    edge_inds = np.arange(edge_sort.shape[0], dtype=np.int64)
     outer_edge_ids = edge_inds[np.in1d(edge_inds, uniq_ids[counts==1])]
     outer_edges = edge_sort[outer_edge_ids,:]
     num_outer_edges = outer_edges.shape[0]
@@ -494,7 +541,7 @@ def get_mesh_boundary(triangles):
     # Loop over outer edges and use traversal method to get ordered vertices.
     v_start = outer_edges[0,0]
     v_end = outer_edges[0,1]
-    vert_inds = -1*np.ones(num_outer_verts, dtype=np.int)
+    vert_inds = -1*np.ones(num_outer_verts, dtype=np.int64)
     vert_inds[0] = v_start
     vert_inds[1] = v_end
     vert_num = 2

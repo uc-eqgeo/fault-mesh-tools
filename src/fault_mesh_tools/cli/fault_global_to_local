@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple app to convert either a single VTK file or a directory with
+Simple script to convert either a single VTK file or a directory with
 multiple VTK files to local coordinates (best-fit plane) and then
 output as a STL file, along with coordinate conversion metadata.
 """
