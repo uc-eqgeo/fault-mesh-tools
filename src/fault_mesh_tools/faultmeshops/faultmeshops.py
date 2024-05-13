@@ -318,6 +318,7 @@ def create_local_grid(points: np.ndarray, edge_sides: dict, triangles: np.ndarra
     """
     Create a grid of points in local coordinates. If the fault is a plane, z-coordinate is
     always zero. Otherwise, points are interpolated from the enclosing triangle vertices.
+    Note:  Input mesh must be a triangulated surface.
     Returned values are:
         mesh_points: The computed mesh points in the local coordinate system
         num_horiz_points: The number of points in the horzontal direction
@@ -514,18 +515,34 @@ def find_projected_coords(tri_coord, point):
     return (in_tri, projected_coords)
 
 
-def get_mesh_boundary(triangles):
+def get_mesh_boundary(cells):
     """
-    Find outer boundary of a triangulated mesh, assuming no holes.
+    Find outer boundary of a mesh, assuming no holes.
     Boundary is determined based purely on connectivity.
     Returned values are:
         vert_inds: The indices of the vertices composing the mesh boundary, ordered to be continuous
     """
+    # Triangular or quadrilateral cells.
+    cell_dim = cells.shape[1]
+    cell_type = ''
+    if (cell_dim == 3):
+        cell_type = 'triangular'
+        edge0 = cells[:,0:2]
+        edge1 = cells[:,1:3]
+        edge2 = cells.take((0,2), axis=1)
+        edges = np.concatenate((edge0, edge1, edge2), axis=0)
+    elif (cell_dim == 4):
+        cell_type = 'quadrilateral'
+        edge0 = cells[:,0:2]
+        edge1 = cells[:,1:3]
+        edge2 = cells[:,2:4]
+        edge3 = cells.take((0,3), axis=1)
+        edges = np.concatenate((edge0, edge1, edge2, edge3), axis=0)
+    else:
+        msg = 'Unrecognized cell type.'
+        raise ValueError(msg)
+
     # Create edges and sort each vertices on each edge.
-    edge0 = triangles[:,0:2]
-    edge1 = triangles[:,1:3]
-    edge2 = triangles.take((0,2), axis=1)
-    edges = np.concatenate((edge0, edge1, edge2), axis=0)
     edge_sort = np.sort(edges, axis=1)
 
     # Get unique edges that are only present once.
