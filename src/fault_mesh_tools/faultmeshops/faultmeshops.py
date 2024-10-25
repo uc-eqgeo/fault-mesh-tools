@@ -6,7 +6,8 @@ import os
 def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray,
                                 plane_type: str='all_points', resolution: float=5000.0,
                                 num_search_tris: int=10, fit_plane_epsilon: float=1.0e-5,
-                                cutoff_rotation_vecmag: float=0.98, is_plane_epsilon: float=1.0):
+                                cutoff_rotation_vecmag: float=0.98, is_plane_epsilon: float=1.0,
+                                close_corners: np.ndarray=None):
     """
     Create a quad mesh, given triangular mesh information.
     Returned values are all in the fault_mesh_info dictionary:
@@ -31,7 +32,7 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
                                                                         edges=edges, plane_epsilon=is_plane_epsilon)
 
     # Get edges of boundary and create a grid in local coordinates.
-    quad_edges = get_quad_mesh_edges(edges_local)
+    quad_edges = get_quad_mesh_edges(edges_local, close_corners=close_corners)
     (mesh_points_local,
      num_horiz_points, num_vert_points) = create_local_grid(points_local, quad_edges, triangles, fault_is_plane,
                                                             resolution=resolution, num_search_tris=num_search_tris)
@@ -57,7 +58,7 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
 
     
 def fit_plane_to_points(points: np.ndarray, cells: np.ndarray=None, plane_type: str='all_points',
-                        create_mesh: bool=False, eps: float=1.0e-5):
+                        create_mesh: bool=False, close_corners: np.ndarray=None, eps: float=1.0e-5):
     """
     Find best-fit plane through a set of points, after first insuring the plane goes through
     the mean (centroid) of all the points in the array. This is probably better than my
@@ -79,7 +80,7 @@ def fit_plane_to_points(points: np.ndarray, cells: np.ndarray=None, plane_type: 
     elif plane_type == 'corners':
         edge_inds = get_mesh_boundary(cells)
         edges = points[edge_inds,:]
-        corners = find_corners(edges)
+        corners = find_corners(edges, close_corners)
         plane_origin = np.mean(corners, axis=0)
         x = corners - plane_origin
 
@@ -145,7 +146,7 @@ def axis_angle_from_rotation_matrix(rotation_matrix: np.ndarray, eps: float=1.0e
     return (rot_axis, ang)
                                                                                           
 
-def get_fault_rotation_matrix(plane_normal: np.ndarray, cutoff_vecmag: float = 0.98):
+def get_fault_rotation_matrix(plane_normal: np.ndarray, cutoff_vecmag: float = 0.98, preferred_ref_dir: np.ndarray = None):
     """
     Compute rotation matrix, given the normal to the plane. If the normal is nearly
     vertical an alternate reference direction is used to compute the two tangential
@@ -154,13 +155,17 @@ def get_fault_rotation_matrix(plane_normal: np.ndarray, cutoff_vecmag: float = 0
         rotation_matrix: 3x3 rotation matrix with columns (tan_dir1, tan_dir2, plane_normal).
     """
     # Reference directions to try are z=1 (vertical) and y=1 (north).
-    ref_dir1 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    ref_dir2 = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    ref_dir = ref_dir1
+    if (preferred_ref_dir is None):
+        ref_dir1 = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        ref_dir2 = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        ref_dir = ref_dir1
 
-    # If normal is nearly vertical, use north reference direction.
-    if (np.dot(ref_dir1, plane_normal) > cutoff_vecmag):
-        ref_dir = ref_dir2
+        # If normal is nearly vertical, use north reference direction.
+        if (np.dot(ref_dir1, plane_normal) > cutoff_vecmag):
+            ref_dir = ref_dir2
+    else:
+        ref_dir = preferred_ref_dir
+        ref_dir /= np.linalg.norm(ref_dir)
         
     # Get two tangential directions in plane.
     tan_dir1 = np.cross(ref_dir, plane_normal)
@@ -187,7 +192,7 @@ def fault_global_to_local(points: np.ndarray, rotation_matrix: np.ndarray, plane
     # Rotate referenced coordinates.
     points_local = np.dot(points - plane_origin, rotation_matrix.transpose())
     edges_local = None
-    if (edges):
+    if (edges is not None):
         edges_local = np.dot(edges - plane_origin, rotation_matrix.transpose())
 
     # Determine whether mean normal component is above or below epsilon value.
@@ -210,36 +215,43 @@ def fault_local_to_global(points: np.ndarray, rotation_matrix: np.ndarray, plane
     # Rotate coordinates and add reference point back in.
     points_global = np.dot(points, rotation_matrix) + plane_origin
     edges_global = None
-    if (edges):
+    if (edges is not None):
         edges_global = np.dot(edges, rotation_matrix) + plane_origin
     
     return (points_global, edges_global)
     
     
-def find_corners(edges: np.ndarray, num_corners: int=4):
+def find_corners(edges: np.ndarray, num_corners: int=4, close_corners: np.ndarray=None):
     """
     Find 'corners' of a mesh, given the edges. They are simply determined by finding the smallest
     dot products of the edge segments with each other.
+    If close_corners is specified, instead return the 4 vertices that are closest to these points.
     """
-    # Create vectors of line segments composing outer edges.
-    num_points = edges.shape[0]
-    v1 = np.diff(edges[:,0:2], axis=0, append=edges[1,0:2].reshape(1,2))
-    v2 = np.diff(edges[:,0:2], axis=0, prepend=edges[-2,0:2].reshape(1,2))
-    v1 /= np.linalg.norm(v1, axis=1).reshape(num_points, 1)
-    v2 /= np.linalg.norm(v2, axis=1).reshape(num_points, 1)
+    if (close_corners is None):
+        # Create vectors of line segments composing outer edges.
+        num_points = edges.shape[0]
+        v1 = np.diff(edges[:,0:2], axis=0, append=edges[1,0:2].reshape(1,2))
+        v2 = np.diff(edges[:,0:2], axis=0, prepend=edges[-2,0:2].reshape(1,2))
+        v1 /= np.linalg.norm(v1, axis=1).reshape(num_points, 1)
+        v2 /= np.linalg.norm(v2, axis=1).reshape(num_points, 1)
 
-    # Compute dot product magnitude and sorting index array.
-    # Last point is left out since it has already been included.
-    dot_prod_mag = np.abs(np.sum(v1*v2, axis=1))[:-1]
-    sort_args = np.argsort(dot_prod_mag)
+        # Compute dot product magnitude and sorting index array.
+        # Last point is left out since it has already been included.
+        dot_prod_mag = np.abs(np.sum(v1*v2, axis=1))[:-1]
+        sort_args = np.argsort(dot_prod_mag)
 
-    # Determine which coordinates correspond to each corner.
-    corners = edges[sort_args[0:num_corners],:]
+        # Determine which coordinates correspond to each corner.
+        corners = edges[sort_args[0:num_corners],:]
+    else:
+        edge_tree = scipy.spatial.KDTree(edges)
+        (dist, inds) = edge_tree.query(close_corners)
+        corners = edges[inds,:]
 
     return corners
 
 
-def get_quad_mesh_edges(edges: np.ndarray, corner_separation: float=3000.0):
+def get_quad_mesh_edges(edges: np.ndarray, corner_separation: float=3000.0, close_corners: np.ndarray=None,
+                        sort_first: str='X'):
     """
     Determine 4 sets of edges, assuming a semi-quadrilateral layout.
     Note that all coordinates are assumed to be fault-local coordinates.
@@ -253,38 +265,53 @@ def get_quad_mesh_edges(edges: np.ndarray, corner_separation: float=3000.0):
     """
     # Everything below here is pretty kludgy and should be tidied up.
     # Determine which coordinates correspond to each corner.
-    corners = find_corners(edges)
-    x_sort = np.argsort(corners[:,0])
-    left_corners = corners[x_sort[0:2], :]
-    right_corners = corners[x_sort[2:], :]
-    ul_corner = left_corners[0,:]
-    bl_corner = left_corners[1,:]
-    if (ul_corner[1] < bl_corner[1]):
-        ul_corner = left_corners[1,:]
-        bl_corner = left_corners[0,:]
-    ur_corner = right_corners[0,:]
-    br_corner = right_corners[1,:]
-    if (ur_corner[1] < br_corner[1]):
-        ur_corner = right_corners[1,:]
-        br_corner = right_corners[0,:]
+    corners = find_corners(edges, close_corners=close_corners)
+    if (sort_first == 'X'):
+        x_sort = np.argsort(corners[:,0])
+        left_corners = corners[x_sort[0:2], :]
+        right_corners = corners[x_sort[2:], :]
+        tl_corner = left_corners[0,:]
+        bl_corner = left_corners[1,:]
+        if (tl_corner[1] < bl_corner[1]):
+            tl_corner = left_corners[1,:]
+            bl_corner = left_corners[0,:]
+        tr_corner = right_corners[0,:]
+        br_corner = right_corners[1,:]
+        if (tr_corner[1] < br_corner[1]):
+            tr_corner = right_corners[1,:]
+            br_corner = right_corners[0,:]
+    else:
+        y_sort = np.argsort(corners[:,1])
+        bottom_corners = corners[y_sort[0:2], :]
+        top_corners = corners[y_sort[2:], :]
+        bl_corner = bottom_corners[0,:]
+        br_corner = bottom_corners[1,:]
+        if (br_corner[0] < bl_corner[0]):
+            bl_corner = bottom_corners[1,:]
+            br_corner = bottom_corners[0,:]
+        tl_corner = top_corners[0,:]
+        tr_corner = top_corners[1,:]
+        if (tr_corner[0] < tl_corner[0]):
+            tl_corner = top_corners[1,:]
+            tr_corner = top_corners[0,:]
 
     # Get corner indices.
-    # ul_ind = sort_args[np.argmin(np.linalg.norm(edges - ul_corner, axis=1))]
+    # tl_ind = sort_args[np.argmin(np.linalg.norm(edges - tl_corner, axis=1))]
     # bl_ind = sort_args[np.argmin(np.linalg.norm(edges - bl_corner, axis=1))]
-    # ur_ind = sort_args[np.argmin(np.linalg.norm(edges - ur_corner, axis=1))]
+    # tr_ind = sort_args[np.argmin(np.linalg.norm(edges - tr_corner, axis=1))]
     # br_ind = sort_args[np.argmin(np.linalg.norm(edges - br_corner, axis=1))]
-    ul_ind = np.argmin(np.linalg.norm(edges - ul_corner, axis=1))
+    tl_ind = np.argmin(np.linalg.norm(edges - tl_corner, axis=1))
     bl_ind = np.argmin(np.linalg.norm(edges - bl_corner, axis=1))
-    ur_ind = np.argmin(np.linalg.norm(edges - ur_corner, axis=1))
+    tr_ind = np.argmin(np.linalg.norm(edges - tr_corner, axis=1))
     br_ind = np.argmin(np.linalg.norm(edges - br_corner, axis=1))
-    ind_min = min(ul_ind, bl_ind, ur_ind, br_ind)
-    ind_max = max(ul_ind, bl_ind, ur_ind, br_ind)
+    ind_min = min(tl_ind, bl_ind, tr_ind, br_ind)
+    ind_max = max(tl_ind, bl_ind, tr_ind, br_ind)
 
     # Get edges between corners.
-    left_edge = get_edge(edges, ul_ind, bl_ind, ind_min, ind_max, 1)
-    right_edge = get_edge(edges, ur_ind, br_ind, ind_min, ind_max, 1)
+    left_edge = get_edge(edges, tl_ind, bl_ind, ind_min, ind_max, 1)
+    right_edge = get_edge(edges, tr_ind, br_ind, ind_min, ind_max, 1)
     bottom_edge = get_edge(edges, bl_ind, br_ind, ind_min, ind_max, 0)
-    top_edge = get_edge(edges, ul_ind, ur_ind, ind_min, ind_max, 0)
+    top_edge = get_edge(edges, tl_ind, tr_ind, ind_min, ind_max, 0)
 
     # Create a dictionary for now.
     edge_sides = {'left_edge': left_edge,
