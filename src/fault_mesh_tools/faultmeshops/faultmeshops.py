@@ -1,13 +1,13 @@
 import numpy as np
 import scipy.spatial
+import shapely
 import shapely.geometry as shpgeom
 import os
 
-def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray,
-                                plane_type: str='all_points', resolution: float=5000.0,
-                                num_search_tris: int=10, fit_plane_epsilon: float=1.0e-5,
-                                cutoff_rotation_vecmag: float=0.98, is_plane_epsilon: float=1.0,
-                                close_corners: np.ndarray=None):
+def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray, plane_type: str='all_points',
+                                resolution: float=5000.0, num_search_tris: int=10, fit_plane_epsilon: float=1.0e-5,
+                                cutoff_rotation_vecmag: float=0.98, is_plane_epsilon: float=1.0, close_corners: np.ndarray=None,
+                                tolerant_interpolation: bool=False):
     """
     Create a quad mesh, given triangular mesh information.
     Returned values are all in the fault_mesh_info dictionary:
@@ -33,9 +33,9 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
 
     # Get edges of boundary and create a grid in local coordinates.
     quad_edges = get_quad_mesh_edges(edges_local, close_corners=close_corners)
-    (mesh_points_local,
-     num_horiz_points, num_vert_points) = create_local_grid(points_local, quad_edges, triangles, fault_is_plane,
-                                                            resolution=resolution, num_search_tris=num_search_tris)
+    (mesh_points_local, num_horiz_points,
+     num_vert_points) = create_local_grid(points_local, quad_edges, triangles, fault_is_plane, resolution=resolution,
+                                          num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
 
     # Convert to global coordinates.
     (mesh_points_global,
@@ -341,11 +341,13 @@ def get_edge(edges: np.ndarray, ind1: int, ind2: int, ind_min: int, ind_max: int
 
 
 def create_local_grid(points: np.ndarray, edge_sides: dict, triangles: np.ndarray,
-                      fault_is_plane: bool, resolution: float=5000.0, num_search_tris: int=10):
+                      fault_is_plane: bool, resolution: float=5000.0, num_search_tris: int=10,
+                      tolerant_interpolation: bool=False):
     """
     Create a grid of points in local coordinates. If the fault is a plane, z-coordinate is
     always zero. Otherwise, points are interpolated from the enclosing triangle vertices.
     Note:  Input mesh must be a triangulated surface.
+    If tolerant_interpolation is true, the closest triangle is used for interpolation.
     Returned values are:
         mesh_points: The computed mesh points in the local coordinate system
         num_horiz_points: The number of points in the horzontal direction
@@ -423,7 +425,8 @@ def create_local_grid(points: np.ndarray, edge_sides: dict, triangles: np.ndarra
         is_mesh_edge = is_mesh_edge.reshape(num_points)
         z = z.reshape(num_points)
         mesh_points[:,2] = tri_interpolate_zcoords(points, triangles, mesh_points[:,0:2],
-                                                   is_mesh_edge, num_search_tris=num_search_tris)
+                                                   is_mesh_edge, num_search_tris=num_search_tris,
+                                                   tolerant_interpolation=tolerant_interpolation)
         mesh_points[is_mesh_edge,2] = z[is_mesh_edge]
 
     return (mesh_points, num_horiz_points, num_vert_points)
@@ -454,7 +457,7 @@ def create_cells_from_dims(num_verts_x: int, num_verts_y: int):
             
     
 def tri_interpolate_zcoords(points: np.ndarray, triangles: np.ndarray, mesh_points: np.ndarray,
-                            is_mesh_edge: np.ndarray, num_search_tris: int=10):
+                            is_mesh_edge: np.ndarray, num_search_tris: int=10, tolerant_interpolation: bool=False):
     """
     Interpolate z-coordinates to a set of 2D points using 3D point coordinates and a triangular mesh.
     If point is along a mesh boundary, the boundary values are used instead.
@@ -473,14 +476,14 @@ def tri_interpolate_zcoords(points: np.ndarray, triangles: np.ndarray, mesh_poin
     z = np.zeros(num_mesh_points, dtype=np.float64)
     for point_num in range(num_mesh_points):
         if not(is_mesh_edge[point_num]):
-            z[point_num] = project_2d_coords(tri_coords, coords2d[point_num,:], tri_tree,
-                                             num_search_tris=num_search_tris)
+            z[point_num] = project_2d_coords(tri_coords, coords2d[point_num,:], tri_tree, num_search_tris=num_search_tris,
+                                             tolerant_interpolation=tolerant_interpolation)
 
     return z
 
 
 def project_2d_coords(tri_coords: np.ndarray, coord: np.ndarray, tree: scipy.spatial.ckdtree.cKDTree,
-                      num_search_tris: int=10):
+                      num_search_tris: int=10, tolerant_interpolation: bool=False):
     """
     Project z-coordinate for triangle coordinates.
     Returned values are:
@@ -489,27 +492,38 @@ def project_2d_coords(tri_coords: np.ndarray, coord: np.ndarray, tree: scipy.spa
     # Find nearest triangles, then loop over them.
     (distances, ix) = tree.query(coord, k=num_search_tris)
     in_tri = False
+    nearest_tri = -1
+    tri_dist = 1.0e30
     for triangle_num in range(num_search_tris):
         triangle = ix[triangle_num]
         tri_coord = tri_coords[triangle,:]
-        (in_tri, projected_coords) = find_projected_coords(tri_coord, coord)
+        (in_tri, projected_coords, dist) = find_projected_coords(tri_coord, coord)
+        if (dist < tri_dist):
+            tri_dist = dist
+            nearest_tri = triangle
         if (in_tri):
             break
 
     if (not in_tri):
-        msg = 'No containing triangle found for point (%g, %g)' % (coord[0], coord[1])
-        raise ValueError(msg)
+        if (tolerant_interpolation):
+            tri_coord = tri_coords[nearest_tri,:]
+            (in_tri, projected_coords, dist) = find_projected_coords(tri_coord, coord, use_given_tri=True)
+        else:
+            msg = 'No containing triangle found for point (%g, %g)' % (coord[0], coord[1])
+            raise ValueError(msg)
 
     return projected_coords[2]
         
         
-def find_projected_coords(tri_coord, point):
+def find_projected_coords(tri_coord: np.ndarray, point: np.ndarray, use_given_tri: bool=False):
     """
     Find whether a point projects within a triangle, and if so compute the
     projected coordinates.
+    If use_given_tri = True, the given triangle is used for interpolation.
     Returned values are:
         in_tri: Boolean indicating whether the point is contained in the triangle
         projected_coords: The (x,y,z) coordinates of the point inferred from the triangle values
+        dist: The distance between the point and the triangle (according to Shapely)
     """
     x_point = point[0]
     y_point = point[1]
@@ -517,6 +531,7 @@ def find_projected_coords(tri_coord, point):
     polygon = shpgeom.Polygon(tri_coord[:,0:2])
     in_tri = polygon.intersects(point_plane)
     projected_coords = None
+    distance = shapely.distance(polygon, point_plane)
 
     # If point is inside triangle, compute area coordinates and use these to
     # compute projected coordinates.
@@ -524,7 +539,7 @@ def find_projected_coords(tri_coord, point):
     # 1.  Make sure that alpha, beta, and gamma are all between 0 and 1.
     # 2.  Make sure that projected_coords[0] and projected_coords[1] are equal to
     #     the original point coordinates.
-    if (in_tri):
+    if (in_tri or use_given_tri):
         u = tri_coord[1,0:2] - tri_coord[0,0:2]
         v = tri_coord[2,0:2] - tri_coord[0,0:2]
         area = abs(np.cross(u, v))
@@ -539,7 +554,7 @@ def find_projected_coords(tri_coord, point):
         gamma = 1.0 - alpha - beta
         projected_coords = beta*tri_coord[0,:] + gamma*tri_coord[1,:] + alpha*tri_coord[2,:]
 
-    return (in_tri, projected_coords)
+    return (in_tri, projected_coords, distance)
 
 
 def get_mesh_boundary(cells):

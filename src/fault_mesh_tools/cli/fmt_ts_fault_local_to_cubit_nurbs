@@ -17,6 +17,7 @@ import pickle
 import meshio
 
 from fault_mesh_tools.faultmeshops import faultmeshops
+import pdb
 
 # File suffixes and search string.
 md_suffix = '.pkl'
@@ -41,7 +42,8 @@ def write_cubit_line(f, points):
     return
 
 
-def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, output_global, read_corners, sort_first):
+def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, output_global, read_corners, sort_first,
+                 tolerant_interpolation):
     """
     Function to generate Cubit journal commands to generate a NURBS surface based
     on an input mesh file.
@@ -62,7 +64,7 @@ def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, ou
     ang_degrees = -np.degrees(ang_radians)
     plane_origin = mv['plane_origin']
     fault_is_plane = mv['fault_is_plane']
-    num_search_tris = 15
+    num_search_tris = 200
 
     # Read corners, if provided.
     corners = None
@@ -75,9 +77,9 @@ def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, ou
     quad_edges = faultmeshops.get_quad_mesh_edges(edges, close_corners=corners, sort_first=sort_first)
 
     # Create grid in local cordinates.
-    (mesh_points,
-     num_horiz_points, num_vert_points) = faultmeshops.create_local_grid(points, quad_edges, triangles, fault_is_plane,
-                                                                         resolution=resolution, num_search_tris=num_search_tris)
+    (mesh_points, num_horiz_points,
+     num_vert_points) = faultmeshops.create_local_grid(points, quad_edges, triangles, fault_is_plane, resolution=resolution,
+                                                       num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
     mesh_points = mesh_points.reshape(num_vert_points, num_horiz_points, 3)
     
     # Open journal file and create commands.
@@ -109,7 +111,8 @@ def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, ou
     return
     
 
-def convert_dir(in_path, out_path, in_qualifier, out_qualifier, in_suffix, resolution, output_global, read_corners, sort_first, verbose):
+def convert_dir(in_path, out_path, in_qualifier, out_qualifier, in_suffix, resolution, output_global, read_corners, sort_first,
+                tolerant_interpolation, verbose):
     """
     Function to convert a directory of mesh files to Cubit journal commands.
     """
@@ -146,7 +149,8 @@ def convert_dir(in_path, out_path, in_qualifier, out_qualifier, in_suffix, resol
         out_journal = out_root.with_suffix(jou_suffix)
         out_cub = out_root.with_suffix(cub_suffix)
         m.write('playback "'"%s"'"\n' % out_journal)
-        convert_file(file_in, md_in, corner_in, out_cub, out_journal, resolution, output_global, read_corners, sort_first)
+        convert_file(file_in, md_in, corner_in, out_cub, out_journal, resolution, output_global, read_corners, sort_first,
+                     tolerant_interpolation)
 
     m.close()
     return
@@ -177,14 +181,20 @@ if __name__ == "__main__":
                         dest="read_corners", help="read file defining mesh corners")
     parser.add_argument("-nci", "--no_read_corners", action="store_false",
                         dest="read_corners", help="do not read file defining mesh corners")
+    parser.add_argument("-ti", "--tolerant_interpolation", action="store_true",
+                        dest="tolerant_interpolation", help="use tolerant interpolation")
+    parser.add_argument("-nti", "--no_tolerant_interpolation", action="store_false",
+                        dest="tolerant_interpolation", help="do not use tolerant interpolation")
     parser.add_argument("-sf", "--sort_first", action="store", 
                         dest="sort_first", default="X", help="first sort direction for finding local edges")
     parser.add_argument("-v", "--verbose", action="store_true", 
                         dest="verbose", default=False, help="verbose output for directories")
     parser.set_defaults(output_global=True)
-    parser.set_defaults(read_corners=True)
+    parser.set_defaults(read_corners=False)
+    parser.set_defaults(tolerant_interpolation=False)
      
     args = parser.parse_args()
+    # pdb.set_trace()
 
     in_path = Path(args.in_files).resolve()
     out_dir = Path(args.out_directory).resolve()
@@ -195,6 +205,7 @@ if __name__ == "__main__":
     resolution = float(args.resolution)
     output_global = args.output_global
     read_corners = args.read_corners
+    tolerant_interpolation = args.tolerant_interpolation
     sort_first = args.sort_first
     verbose = args.verbose
 
@@ -216,10 +227,12 @@ if __name__ == "__main__":
         out_path = Path.joinpath(out_dir, out_stem)
         out_cub = out_path.with_suffix(cub_suffix)
         out_jou = out_path.with_suffix(jou_suffix)
-        convert_file(in_path, in_md, in_corner, out_cub, out_jou, resolution, output_global, read_corners, sort_first)
+        convert_file(in_path, in_md, in_corner, out_cub, out_jou, resolution, output_global, read_corners, sort_first,
+                     tolerant_interpolation)
     # Case 2:  Convert directory.
     elif (in_path.is_dir()):
-        convert_dir(in_path, out_dir, in_qualifier, out_qualifier, in_suffix, resolution, output_global, read_corners, sort_first, verbose)
+        convert_dir(in_path, out_dir, in_qualifier, out_qualifier, in_suffix, resolution, output_global, read_corners, sort_first,
+                    tolerant_interpolation, verbose)
     # Case 3:  Give up.
     else:
         msg = 'Unable to find %s.' % in_path
