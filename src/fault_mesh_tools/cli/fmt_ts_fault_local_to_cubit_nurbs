@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+Simple script to convert either a single mesh file or a directory with
+multiple mesh files to cubit journal commands to generate a NURBS surface
+in local or global coordinates using Cubit.
+"""
+
+# The code requires numpy, pathlib, argparse, sys, pickle, meshio,
+# and the fault_mesh_tools.faultmeshops package.
+import numpy as np
+
+from pathlib import Path
+import argparse
+import sys
+import pickle
+
+import meshio
+
+from fault_mesh_tools.faultmeshops import faultmeshops
+import pdb
+
+# File suffixes and search string.
+md_suffix = '.pkl'
+md_search = '*' + md_suffix
+corner_suffix = '.csv'
+cub_suffix = '.cub'
+jou_suffix = '.jou'
+jou_master = 'master_local_to_cubit_nurbs.jou'
+
+# ----------------------------------------------------------------------
+def write_cubit_line(f, points):
+    """
+    Write a set of points in Cubit format to create a spline curve.
+    """
+    fmt = ' location %g %g %g'
+    f.write('create curve spline')
+    for point_num in range(points.shape[0]):
+        f.write(fmt % (points[point_num,0], points[point_num,1], points[point_num,2]))
+
+    f.write('\n')
+
+    return
+
+
+def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, output_global, read_corners, sort_first,
+                 tolerant_interpolation):
+    """
+    Function to generate Cubit journal commands to generate a NURBS surface based
+    on an input mesh file.
+    """
+
+    # Read mesh file.
+    mesh = meshio.read(in_mesh)
+    points = mesh.points
+    cells = mesh.cells
+    triangles = cells[0].data
+
+    # Read metadata.
+    m = open(in_md, 'rb')
+    mv = pickle.load(m)
+    m.close()
+    ang_radians = mv['rotation_angle']
+    axis = mv['rotation_axis']
+    ang_degrees = -np.degrees(ang_radians)
+    plane_origin = mv['plane_origin']
+    fault_is_plane = mv['fault_is_plane']
+    num_search_tris = 200
+
+    # Read corners, if provided.
+    corners = None
+    if (read_corners):
+        corners = np.loadtxt(in_corner, delimiter=',', dtype=np.float64)
+
+    # Get mesh edges.
+    edge_inds = faultmeshops.get_mesh_boundary(triangles)
+    edges = points[edge_inds,:]
+    quad_edges = faultmeshops.get_quad_mesh_edges(edges, close_corners=corners, sort_first=sort_first)
+
+    # Create grid in local cordinates.
+    (mesh_points, num_horiz_points,
+     num_vert_points) = faultmeshops.create_local_grid(points, quad_edges, triangles, fault_is_plane, resolution=resolution,
+                                                       num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
+    mesh_points = mesh_points.reshape(num_vert_points, num_horiz_points, 3)
+    
+    # Open journal file and create commands.
+    f = open(out_journal, 'w')
+    f.write('reset\n')
+
+    # Write u-lines.
+    for uline in range(num_vert_points):
+        write_cubit_line(f, mesh_points[uline,:,:])
+
+    # Write v-lines.
+    for vline in range(num_horiz_points):
+        write_cubit_line(f, mesh_points[:,vline,:])
+
+    # Create net surface
+    i1 = 1
+    i2 = num_vert_points
+    i3 = num_vert_points + 1
+    i4 = i2 + num_horiz_points
+    f.write('create surface net u curve %d to %d v curve %d to %d\n' % (i1, i2, i3, i4))
+    f.write('delete curve all\n')
+    if (output_global):
+        f.write('rotate surface all about %g %g %g angle %g\n' % (axis[0], axis[1], axis[2], ang_degrees))
+        f.write('volume all move x %g y %g z %g\n' % (plane_origin[0], plane_origin[1], plane_origin[2]))
+
+    f.write('export Cubit ' + '"' + str(out_cub) + '" overwrite\n')
+    f.close()
+    
+    return
+    
+
+def convert_dir(in_path, out_path, in_qualifier, out_qualifier, in_suffix, resolution, output_global, read_corners, sort_first,
+                tolerant_interpolation, verbose):
+    """
+    Function to convert a directory of mesh files to Cubit journal commands.
+    """
+    in_search = '*' + in_suffix
+    corner_search = '*' + corner_suffix
+    in_files = sorted(in_path.glob(in_search))
+    in_md = sorted(in_path.glob(md_search))
+    if (read_corners):
+        in_corners = sorted(in_path.glob(corner_search))
+        if (len(in_files) != len(in_corners)):
+            msg = 'Number of input mesh files does not match number of input corner files.'
+            raise ValueError(msg)
+    if (len(in_files) != len(in_md)):
+        msg = 'Number of input mesh files does not match number of input metadata files.'
+        raise ValueError(msg)
+    out_master = Path.joinpath(out_path, jou_master)
+    m = open(out_master, 'w')
+    for file_num in range(len(in_files)):
+        file_in = in_files[file_num]
+        md_in = in_md[file_num]
+        in_stem = file_in.stem
+        out_stem = in_stem
+        corner_in = None
+        if (read_corners):
+            corner_in = in_corners[file_num]
+            corner_stem = corner_in.stem
+        if (verbose):
+            print("Input file:  %s" % in_stem)
+        if (in_qualifier):
+            out_stem = in_stem.replace(in_qualifier, out_qualifier)
+        elif (out_qualifier):
+            out_stem = in_stem + out_qualifier
+        out_root = Path.joinpath(out_path, out_stem)
+        out_journal = out_root.with_suffix(jou_suffix)
+        out_cub = out_root.with_suffix(cub_suffix)
+        m.write('playback "'"%s"'"\n' % out_journal)
+        convert_file(file_in, md_in, corner_in, out_cub, out_journal, resolution, output_global, read_corners, sort_first,
+                     tolerant_interpolation)
+
+    m.close()
+    return
+
+  
+# ======================================================================
+if __name__ == "__main__":
+
+    # Get command-line arguments.
+    parser = argparse.ArgumentParser(description='Generate Cubit commands to create NURBS surfaces based on input STL files.')
+    parser.add_argument("-i", "--in_files", action="store", 
+                        dest="in_files", required=True, help="input file or directory")
+    parser.add_argument("-iq", "--in_qualifier", action="store", 
+                        dest="in_qualifier", default=None, help="additional input filename qualifier following unique string")
+    parser.add_argument("-o", "--out_directory", action="store", 
+                        dest="out_directory", required=True, help="output directory")
+    parser.add_argument("-oq", "--out_qualifier", action="store", 
+                        dest="out_qualifier", default="_global", help="additional output filename qualifier following unique string")
+    parser.add_argument("-is", "--in_suffix", action="store", 
+                        dest="in_suffix", default=".stl", help="suffix of input file(s)")
+    parser.add_argument("-r", "--resolution", action="store", 
+                        dest="resolution", default=2000.0, help="resolution used to create NURBS surface in meters")
+    parser.add_argument("-og", "--output_global", action="store_true",
+                        dest="output_global", help="output mesh in global coordinates")
+    parser.add_argument("-nog", "--no_output_global", action="store_false",
+                        dest="output_global", help="keep output mesh in local coordinates")
+    parser.add_argument("-ci", "--read_corners", action="store_true",
+                        dest="read_corners", help="read file defining mesh corners")
+    parser.add_argument("-nci", "--no_read_corners", action="store_false",
+                        dest="read_corners", help="do not read file defining mesh corners")
+    parser.add_argument("-ti", "--tolerant_interpolation", action="store_true",
+                        dest="tolerant_interpolation", help="use tolerant interpolation")
+    parser.add_argument("-nti", "--no_tolerant_interpolation", action="store_false",
+                        dest="tolerant_interpolation", help="do not use tolerant interpolation")
+    parser.add_argument("-sf", "--sort_first", action="store", 
+                        dest="sort_first", default="X", help="first sort direction for finding local edges")
+    parser.add_argument("-v", "--verbose", action="store_true", 
+                        dest="verbose", default=False, help="verbose output for directories")
+    parser.set_defaults(output_global=True)
+    parser.set_defaults(read_corners=False)
+    parser.set_defaults(tolerant_interpolation=False)
+     
+    args = parser.parse_args()
+    # pdb.set_trace()
+
+    in_path = Path(args.in_files).resolve()
+    out_dir = Path(args.out_directory).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    in_qualifier = args.in_qualifier
+    out_qualifier = args.out_qualifier
+    in_suffix = args.in_suffix
+    resolution = float(args.resolution)
+    output_global = args.output_global
+    read_corners = args.read_corners
+    tolerant_interpolation = args.tolerant_interpolation
+    sort_first = args.sort_first
+    verbose = args.verbose
+
+    # Case 1:  Convert single file.
+    if (in_path.is_file()):
+        in_parent = in_path.parent
+        in_suff = in_path.suffix
+        in_stem = in_path.stem
+        in_md = Path.joinpath(in_parent, in_stem + md_suffix)
+        in_corner = Path.joinpath(in_parent, in_stem + corner_suffix)
+        if (in_suff != in_suffix):
+            msg = 'Filename does not match in_suffix.'
+            raise ValueError(msg)
+        out_stem = in_stem
+        if (in_qualifier):
+            out_stem = in_stem.replace(in_qualifier, out_qualifier)
+        elif (out_qualifier):
+            out_stem = in_stem + out_qualifier
+        out_path = Path.joinpath(out_dir, out_stem)
+        out_cub = out_path.with_suffix(cub_suffix)
+        out_jou = out_path.with_suffix(jou_suffix)
+        convert_file(in_path, in_md, in_corner, out_cub, out_jou, resolution, output_global, read_corners, sort_first,
+                     tolerant_interpolation)
+    # Case 2:  Convert directory.
+    elif (in_path.is_dir()):
+        convert_dir(in_path, out_dir, in_qualifier, out_qualifier, in_suffix, resolution, output_global, read_corners, sort_first,
+                    tolerant_interpolation, verbose)
+    # Case 3:  Give up.
+    else:
+        msg = 'Unable to find %s.' % in_path
+        raise ValueError(msg)
+    

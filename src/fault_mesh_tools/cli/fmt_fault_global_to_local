@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Simple app to convert either a single VTK file or a directory with
-multiple VTK files to local coordinates (best-fit plane) and then
-output as a STL file, along with coordinate conversion metadata.
+Simple script to convert either a single mesh file or a directory with
+multiple mesh files to local coordinates (best-fit plane) and then
+output as a mesh file, along with coordinate conversion metadata.
 """
 
 # The code requires numpy, pathlib, argparse, sys, pickle, meshio,
@@ -18,30 +18,27 @@ import meshio
 
 from fault_mesh_tools.faultmeshops import faultmeshops
 
-# File suffixes and search string.
-vtk_suffix = '.vtk'
-vtk_search = '*' + vtk_suffix
-stl_suffix = '.stl'
+# Metadata file suffix.
 md_suffix = '.pkl'
 
 # ----------------------------------------------------------------------
-def convert_file(in_file, out_root):
+def convert_file(in_file, out_root, out_suffix, preferred_ref_dir):
     """
-    Function to read a VTK file and output a STL file in local coordinates,
+    Function to read a mesh file and output a mesh file in local coordinates,
     along with metadata (in a pickle file).
     """
 
-    out_stl = out_root.with_suffix(stl_suffix)
+    out_mesh = out_root.with_suffix(out_suffix)
     out_md = out_root.with_suffix(md_suffix)
     
-    # Read VTK file.
-    vtk = meshio.read(in_file)
-    points = vtk.points
-    cells = vtk.cells
+    # Read input file.
+    mesh = meshio.read(in_file)
+    points = mesh.points
+    cells = mesh.cells
 
     # Get best-fit plane through points and rotation matrix.
     (plane_normal, plane_origin) = faultmeshops.fit_plane_to_points(points, eps=1.0e-5)
-    rotation_matrix = faultmeshops.get_fault_rotation_matrix(plane_normal, cutoff_vecmag=0.98)
+    rotation_matrix = faultmeshops.get_fault_rotation_matrix(plane_normal, cutoff_vecmag=0.98, preferred_ref_dir=preferred_ref_dir)
     (rotation_axis, rotation_angle) = faultmeshops.axis_angle_from_rotation_matrix(rotation_matrix)
     
     # Local coordinates.
@@ -57,20 +54,21 @@ def convert_file(in_file, out_root):
     pickle.dump(surface_info, f)
     f.close()
 
-    # Write mesh as STL file.
-    mesh = meshio.Mesh(points_local, cells)
-    meshio.write(out_stl, mesh)
+    # Write mesh in local coordinates.
+    meshLocal = meshio.Mesh(points_local, cells)
+    meshio.write(out_mesh, meshLocal)
 
     return
     
 
-def convert_dir(in_path, out_path, in_qualifier, out_qualifier, verbose):
+def convert_dir(in_path, out_path, in_qualifier, out_qualifier, in_suffix, out_suffix, preferred_ref_dir, verbose):
     """
-    Function to convert a directory of VTK files to STL files in local coordinates.
+    Function to convert a directory of mesh files to mesh files in local coordinates.
     """
-    vtk_files = sorted(in_path.glob(vtk_search))
-    for vtk_file in vtk_files:
-        in_stem = vtk_file.stem
+    in_search = '*' + in_suffix
+    in_files = sorted(in_path.glob(in_search))
+    for in_file in in_files:
+        in_stem = in_file.stem
         out_stem = in_stem
         if (verbose):
             print("Input file:  %s" % in_stem)
@@ -79,7 +77,7 @@ def convert_dir(in_path, out_path, in_qualifier, out_qualifier, verbose):
         elif (out_qualifier):
             out_stem = in_stem + out_qualifier
         out_root = Path.joinpath(out_path, out_stem)
-        convert_file(vtk_file, out_root)
+        convert_file(in_file, out_root, out_suffix, preferred_ref_dir)
 
     return
 
@@ -88,7 +86,7 @@ def convert_dir(in_path, out_path, in_qualifier, out_qualifier, verbose):
 if __name__ == "__main__":
 
     # Get command-line arguments.
-    parser = argparse.ArgumentParser(description='Convert one or more VTK files to STL files in local coordinates.')
+    parser = argparse.ArgumentParser(description='Convert one or more mesh files to mesh files in local coordinates.')
     parser.add_argument("-i", "--in_files", action="store", 
                         dest="in_files", required=True, help="input file or directory")
     parser.add_argument("-iq", "--in_qualifier", action="store", 
@@ -97,6 +95,12 @@ if __name__ == "__main__":
                         dest="out_directory", required=True, help="output directory")
     parser.add_argument("-oq", "--out_qualifier", action="store", 
                         dest="out_qualifier", default="_local", help="additional output filename qualifier following unique string")
+    parser.add_argument("-is", "--in_suffix", action="store", 
+                        dest="in_suffix", default=".vtk", help="suffix of input file(s)")
+    parser.add_argument("-os", "--out_suffix", action="store", 
+                        dest="out_suffix", default=".stl", help="suffix of output file(s)")
+    parser.add_argument("-pd", "--preferred_ref_dir", action="store", nargs=3, metavar=('v1', 'v2', 'v3'), type=float,
+                        dest="preferred_ref_dir", default=None, help="preferred reference direction vector perpendicular to plane normal")
     parser.add_argument("-v", "--verbose", action="store_true", 
                         dest="verbose", default=False, help="verbose output for directories")
 
@@ -107,14 +111,18 @@ if __name__ == "__main__":
     out_dir.mkdir(parents=True, exist_ok=True)
     in_qualifier = args.in_qualifier
     out_qualifier = args.out_qualifier
+    in_suffix = args.in_suffix
+    out_suffix = args.out_suffix
+    if (args.preferred_ref_dir):
+        preferred_ref_dir = np.array(args.preferred_ref_dir)
     verbose = args.verbose
 
     # Case 1:  Convert single file.
     if (in_path.is_file()):
         in_suff = in_path.suffix
         in_stem = in_path.stem
-        if (in_suff != vtk_suffix):
-            msg = 'Only VTK (*.vtk) files are allowed as input.'
+        if (in_suff != in_suffix):
+            msg = 'Filename does not match in_suffix.'
             raise ValueError(msg)
         out_stem = in_stem
         if (in_qualifier):
@@ -122,10 +130,10 @@ if __name__ == "__main__":
         elif (out_qualifier):
             out_stem = in_stem + out_qualifier
         out_path = Path.joinpath(out_dir, out_stem)
-        convert_file(in_path, out_path)
+        convert_file(in_path, out_path, out_suffix, preferred_ref_dir)
     # Case 2:  Convert directory.
     elif (in_path.is_dir()):
-        convert_dir(in_path, out_dir, in_qualifier, out_qualifier, verbose)
+        convert_dir(in_path, out_dir, in_qualifier, out_qualifier, in_suffix, out_suffix, preferred_ref_dir, verbose)
     # Case 3:  Give up.
     else:
         msg = 'Unable to find %s.' % in_path

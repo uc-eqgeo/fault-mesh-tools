@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple app to convert either a single STL file or a directory with
+Simple script to convert either a single STL file or a directory with
 multiple STL files to global coordinates, given the plane normal
 and origin of the local coordinate system. Output is a corresponding
 STL file.

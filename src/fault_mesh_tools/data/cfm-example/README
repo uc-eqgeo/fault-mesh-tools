@@ -1,0 +1,17 @@
+This is a simple example demonstrating how to take triangulated
+surfaces from the CFM and produce Cubit journal commands to create
+a NURBS surface.  The starting point is To run the example we first:
+
+1.  Create STL surfaces in in fault local coordinates. This creates a new
+    directory with both STL files and Python pickle files with metadata
+    describing the local coordinate system.
+
+    ./test_fmt_fault_global_to_local_multi.sh
+
+2.  Create the Cubit journal commands necessary to produce a Cubit net
+    surface, which can then be saved as a NURBS surface.
+
+    ./test_fmt_ts_fault_local_to_cubit_nurbs_multi.sh
+
+3.  Once these have been completed, the journal file can be executed from
+    within Cubit.

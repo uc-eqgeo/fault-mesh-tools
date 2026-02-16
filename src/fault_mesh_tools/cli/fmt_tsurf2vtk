@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple app to convert either a single tsurf file or a directory with
+Simple script to convert either a single tsurf file or a directory with
 multiple tsurf files to VTK format for visualization with Paraview or
 other visualization packages.
 """
