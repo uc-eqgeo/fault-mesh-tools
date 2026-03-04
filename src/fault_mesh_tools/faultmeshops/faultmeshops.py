@@ -1,7 +1,11 @@
 import numpy as np
+import math
 import scipy.spatial
 import shapely
 import shapely.geometry as shpgeom
+import cv2
+from pyproj import Transformer
+from pyproj import CRS
 import os
 
 def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles: np.ndarray, plane_type: str='all_points',
@@ -34,8 +38,8 @@ def create_quad_mesh_from_fault(points: np.ndarray, edges: np.ndarray, triangles
     # Get edges of boundary and create a grid in local coordinates.
     quad_edges = get_quad_mesh_edges(edges_local, close_corners=close_corners)
     (mesh_points_local, num_horiz_points,
-     num_vert_points) = create_local_grid(points_local, quad_edges, triangles, fault_is_plane, resolution=resolution,
-                                          num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
+     num_vert_points) = create_local_grid_tris(points_local, quad_edges, triangles, fault_is_plane, resolution=resolution,
+                                               num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
 
     # Convert to global coordinates.
     (mesh_points_global,
@@ -340,9 +344,149 @@ def get_edge(edges: np.ndarray, ind1: int, ind2: int, ind_min: int, ind_max: int
     return edge
 
 
-def create_local_grid(points: np.ndarray, edge_sides: dict, triangles: np.ndarray,
-                      fault_is_plane: bool, resolution: float=5000.0, num_search_tris: int=10,
-                      tolerant_interpolation: bool=False):
+def create_slab2_geom(lon: np.ndarray, lat: np.ndarray, depths: np.ndarray, coordsys_info: dict,
+                      min_elevation: float=-70000.0):
+    """
+    Get local coordinate info for slab 2.0 geometry and create a contour corresponding to the edges of
+    the geometry.
+    """
+    # Get coordsys info from dictionary.
+    coordsys_type = coordsys_info['coordsys_type']
+    coordsys_origin_option = coordsys_info['coordsys_origin_option']
+    coordsys_origin = coordsys_info['coordsys_origin']
+    coordsys_origin_precision = coordsys_info['coordsys_origin_precision']
+    coordsys_rot_angle = coordsys_info['coordsys_rot_angle']
+    coordsys_rotation = '_rotate'
+    if (coordsys_rot_angle == 0.0):
+        coordsys_rotation = '_norotate'
+
+    cartesian_coordsys_info = {'coordsys_type': coordsys_type,
+                               'coordsys_rot_angle': coordsys_rot_angle}
+                     
+    # Contour parameters.
+    max_val = 200
+    thresh_binary = 20
+
+    # Get info about coordinates.
+    depths *= 1000.0
+    num_x = lon.shape[0]
+    num_y = lat.shape[0]
+    good_vals = np.logical_and(np.isfinite(depths), depths >= min_elevation)
+    good_inds = np.where(good_vals)
+    good_lats = lat[good_inds[0]]
+    good_lons = lon[good_inds[1]]
+    good_elevs = depths[good_inds]
+    good_coords = np.column_stack((good_lats, good_lons))
+
+    # Create greyscale image of valid slab values.
+    below_min = np.where(depths < min_elevation)
+    scale_array = np.zeros_like(depths, dtype=np.int32)
+    scale_array[good_vals] = max_val
+    scale_array[below_min] = 0
+    img = np.uint8(scale_array)
+    (thr, img_thresh_b) = cv2.threshold(img, thresh_binary, max_val, cv2.THRESH_BINARY)
+
+    # Create contour.
+    (contours, hierarchy) = cv2.findContours(img_thresh_b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    num_contours = len(contours)
+    if (num_contours != 1):
+        msg = "Found %d contours, expected 1." % num_contours
+        raise ValueError(msg)
+
+    contour = contours[0]
+    lon_inds = contour[:,0,0]
+    lat_inds = contour[:,0,1]
+
+    contour_lons = lon[lon_inds]
+    contour_lats = lat[lat_inds]
+    contour_elevs = depths[lat_inds, lon_inds]
+
+    # WGS84 info.
+    datum_info = " +ellps=WGS84 +datum=WGS84 +towgs84=0.0,0.0,0.0"
+    WGS84 = "+proj=lonlat" + datum_info
+
+    # Average of valid coordinates.
+    mean_coords = np.mean(good_coords, axis=0)
+
+    # Rotation info.
+    cartesian_coordsys_info['rotation_angle'] = coordsys_rot_angle
+    if (coordsys_rotation == 'rotate'):
+        ang_radians = math.radians(coordsys_rot_angle)
+        cos_ang = math.cos(ang_radians)
+        sin_ang = math.sin(ang_radians)
+        rot_mat = np.array([[cos_ang, sin_ang, 0.0],
+                            [-sin_ang, cos_ang, 0.0],
+                            [0.0, 0.0, 1.0]], dtype=np.float64)
+    
+    if (coordsys_type == 'tmerc'):
+        if (coordsys_origin_option == 'compute_origin'):
+            origin_lat = round(mean_coords[0], coordsys_origin_precision)
+            origin_lon = round(mean_coords[1], coordsys_origin_precision)
+        elif (coordsys_origin_option == 'use_given_origin'):
+            origin_lat = coordsys_origin['latitude']
+            origin_lon = coordsys_origin['longitude']
+        else:
+            msg = 'Origin required for tmerc projection'
+            raise ValueError(msg)
+
+        # Get local coordinate info.
+        LOCAL = "+proj=tmerc +lon_0=" + str(origin_lon) + " lat_0=" + str(origin_lat) + " +k=0.9996" + datum_info
+        transWGS84ToLOCAL = Transformer.from_crs(WGS84, LOCAL, always_xy=True)
+        local_trans = CRS.from_string(LOCAL)
+        cartesian_coordsys_info['proj_str'] = local_trans
+
+        # Transform to local coordinate system.
+        (good_x, good_y) = transWGS84ToLOCAL.transform(good_lons, good_lats)
+        (contour_x, contour_y) = transWGS84ToLOCAL.transform(contour_lons, contour_lats)
+        slab_points = np.column_stack((good_x, good_y, good_elevs))    
+        contour_points = np.column_stack((contour_x, contour_y, contour_elevs))    
+    elif (coordsys_type == 'utm'):
+        mean_lat = mean_coords[0]
+        mean_lon = mean_coords[1]
+        utm_zone = math.floor((mean_lon + 180)/6) + 1
+        utm_south = False if mean_lat >= 0 else True
+        LOCAL = CRS.from_dict({'proj': 'utm', 'zone': utm_zone, 'south': utm_south})
+        transWGS84ToLOCAL = Transformer.from_crs(WGS84, local_trans, always_xy=True)
+        local_trans = CRS.from_string(LOCAL)
+        cartesian_coordsys_info['proj_str'] = local_trans
+
+        # Transform to local coordinate system.
+        (good_x, good_y) = transWGS84ToLOCAL.transform(good_lons, good_lats)
+        (contour_x, contour_y) = transWGS84ToLOCAL.transform(contour_lons, contour_lats)
+        slab_points = np.column_stack((good_x, good_y, good_elevs))    
+        contour_points = np.column_stack((contour_x, contour_y, contour_elevs))    
+
+        # I am assuming cartesian shift if we're using UTM. I probably need to alter how I do this.
+        origin_x = 0.0
+        origin_y = 0.0
+        if (coordsys_origin_option == 'compute_origin'):
+            mean_coords = np.mean(slab_points, axis=0)
+            origin_x = round(mean_coords[0], coordsys_origin_precision)
+            origin_y = round(mean_coords[1], coordsys_origin_precision)
+        elif (coordsys_origin_option == 'use_given_origin'):
+            origin_x = coordsys_origin['x']
+            origin_y = coordsys_origin['y']
+
+        origin = np.array([origin_x, origin_y, 0.0])
+        slab_points -= origin
+        contour_points -= origin
+        cartesian_coordsys_info['origin']['x'] = origin_x
+        cartesian_coordsys_info['origin']['y'] = origin_y
+
+    # Rotate coordinates if desired.
+    if (coordsys_rotation == 'rotate'):
+        slab_points_rot = np.dot(rotMat, slab_points.transpose()).transpose()
+        contour_points_rot = np.dot(rotMat, contour_points.transpose()).transpose()
+    else:
+        slab_points_rot = slab_points.copy()
+        contour_points_rot = contour_points.copy()
+        
+    return (cartesian_coordsys_info, slab_points_rot, contour_points_rot)
+    
+
+def create_local_grid_tris(points: np.ndarray, edge_sides: dict, triangles: np.ndarray,
+                           fault_is_plane: bool, resolution: float=5000.0, num_search_tris: int=10,
+                           tolerant_interpolation: bool=False):
     """
     Create a grid of points in local coordinates. If the fault is a plane, z-coordinate is
     always zero. Otherwise, points are interpolated from the enclosing triangle vertices.

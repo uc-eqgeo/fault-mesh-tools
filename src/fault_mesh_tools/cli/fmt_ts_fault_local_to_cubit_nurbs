@@ -78,8 +78,8 @@ def convert_file(in_mesh, in_md, in_corner, out_cub, out_journal, resolution, ou
 
     # Create grid in local cordinates.
     (mesh_points, num_horiz_points,
-     num_vert_points) = faultmeshops.create_local_grid(points, quad_edges, triangles, fault_is_plane, resolution=resolution,
-                                                       num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
+     num_vert_points) = faultmeshops.create_local_grid_tris(points, quad_edges, triangles, fault_is_plane, resolution=resolution,
+                                                            num_search_tris=num_search_tris, tolerant_interpolation=tolerant_interpolation)
     mesh_points = mesh_points.reshape(num_vert_points, num_horiz_points, 3)
     
     # Open journal file and create commands.
