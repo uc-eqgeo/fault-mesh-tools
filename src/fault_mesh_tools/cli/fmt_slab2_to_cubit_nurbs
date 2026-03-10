@@ -120,11 +120,11 @@ def slab2_to_cubit(in_path, in_corner_path, in_external_boundary_path, out_cub, 
 
         # As far as I know, the number of bodies with the chop is indeterminate, so we can't
         # say which is the outer body that needs to be deleted.
+        f.write("# SET BODY NUMBER BELOW TO THE OUTER BODY SURROUNDING THE SUBDUCTION ZONE.\N")
         f.write("delete body ???\n")
 
         
     if (transform_to_original):
-    pprint.pprint(cartesian_coordsys_info, stream=c)
         if (cartesian_coordsys_info['coordsys_type'] == 'utm'):
             move_x = cartesian_coordsys_info['origin']['x']
             move_y = cartesian_coordsys_info['origin']['y']
