@@ -22,7 +22,7 @@ def read_slab2(in_file):
 
 def write_slab2_outline(points, out_file):
     """
-    Write contour defining slab2 fault as a .vtk file.
+    Write contour defining slab2 fault as a mesh file.
     """
     mesh = meshio.Mesh(points, cells=[])
     meshio.write(out_file, mesh)

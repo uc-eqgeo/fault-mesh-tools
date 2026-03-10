@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""
+Simple script to read a Slab 2.0 .grd file and output the slab boundary.
+"""
+
+# The code requires numpy, pathlib, argparse, pprint, meshio,
+# and the fault_mesh_tools.faultmeshops and faultmeshio packages.
+import numpy as np
+
+from pathlib import Path
+import argparse
+import pprint
+
+from fault_mesh_tools.faultmeshops import faultmeshops
+from fault_mesh_tools.faultmeshio import slab2
+
+# ----------------------------------------------------------------------
+def get_slab2_boundary(in_path, out_boundary, out_coordsys, min_elevation, coordsys_info):
+    """
+    Function to read a Slab 2.0 .grd file and write out the boundary as a mesh file.
+    """
+
+    # Read Slab 2.0 file.
+    (x_in, y_in, vals_in, x_pos_east, y_pos_north) = slab2.read_slab2(in_path)
+
+    # Get local coordinate info.
+    (cartesian_coordsys_info, slab_points, slab_edge) = faultmeshops.create_slab2_geom(x_in, y_in, vals_in, coordsys_info,
+                                                                                       min_elevation=min_elevation)
+    # Print coordinate system info.
+    c = open(out_coordsys, 'w+')
+    pprint.pprint(cartesian_coordsys_info, stream=c)
+
+    # Write mesh file of boundary.
+    slab2.write_slab2_outline(slab_edge, out_boundary)
+
+    return
+    
+
+# ======================================================================
+if __name__ == "__main__":
+
+    # Get command-line arguments.
+    parser = argparse.ArgumentParser(description='Generate Cubit commands to create NURBS surfaces based on input Slab 2.0 file.')
+    parser.add_argument("-i", "--in_file", action="store", dest="in_file", required=True, help="input Slab 2.0 .grd file")
+    parser.add_argument("-ob", "--out_boundary", action="store", dest="out_boundary", required=True, help="output mesh boundary file")
+    parser.add_argument("-ocs", "--out_coordsys", action="store", dest="out_coordsys", default="coordsys_info.txt",
+                        help="output coordsys info file")
+    parser.add_argument("-ct", "--cs_type", action="store", dest="cs_type", default='utm', help="type of projected coordinates")
+    parser.add_argument("-co", "--cs_origin_option", action="store", dest="cs_origin_option", default='compute_origin',
+                        help="whether to compute origin coords (compute_origin), use given origin (use_given_origin) or no origin (no_origin)")
+    parser.add_argument("-cox", "--cs_origin_x", action="store", dest="cs_origin_x", default=0.0, help="origin x-coordinate")
+    parser.add_argument("-coy", "--cs_origin_y", action="store", dest="cs_origin_y", default=0.0, help="origin y-coordinate")
+    parser.add_argument("-cop", "--cs_origin_precision", action="store", dest="cs_origin_precision", default=2,
+                        help="precision of computed origin")
+    parser.add_argument("-cra", "--cs_rot_angle", action="store", dest="cs_rot_angle", default=0.0, help="rotation angle to apply to coordinates")
+    parser.add_argument("-me", "--min_elevation", action="store", dest="min_elevation", default=-70000.0, help="min elevation to use")
+
+    args = parser.parse_args()
+
+    in_path = Path(args.in_file)
+    out_boundary = Path(args.out_boundary)
+    out_boundary.parent.mkdir(parents=True, exist_ok=True)
+    out_coordsys = Path(args.out_coordsys)
+    cs_type = args.cs_type
+    cs_origin_option = args.cs_origin_option
+    cs_origin_x = float(args.cs_origin_x)
+    cs_origin_y = float(args.cs_origin_y)
+    cs_origin_precision = int(args.cs_origin_precision)
+    cs_rot_angle = float(args.cs_rot_angle)
+    min_elevation = float(args.min_elevation)
+
+    cs_origin = {"x": cs_origin_x,
+                 "y": cs_origin_y}
+    if (cs_type == "tmerc"):
+        cs_origin = {"longitude": cs_origin_x,
+                     "latitude": cs_origin_y}
+
+    coordsys_info = {"coordsys_type": cs_type,
+                     "coordsys_origin_option": cs_origin_option,
+                     "coordsys_origin": cs_origin,
+                     "coordsys_origin_precision": cs_origin_precision,
+                     "coordsys_rot_angle": cs_rot_angle}
+                     
+    get_slab2_boundary(in_path, out_boundary, out_coordsys, min_elevation, coordsys_info)
+    

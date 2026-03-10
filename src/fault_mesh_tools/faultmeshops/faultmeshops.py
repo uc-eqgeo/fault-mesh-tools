@@ -1,6 +1,7 @@
 import numpy as np
 import math
 import scipy.spatial
+import scipy.interpolate
 import shapely
 import shapely.geometry as shpgeom
 import cv2
@@ -361,7 +362,8 @@ def create_slab2_geom(lon: np.ndarray, lat: np.ndarray, depths: np.ndarray, coor
         coordsys_rotation = '_norotate'
 
     cartesian_coordsys_info = {'coordsys_type': coordsys_type,
-                               'coordsys_rot_angle': coordsys_rot_angle}
+                               'coordsys_rot_angle': coordsys_rot_angle,
+                               'origin': {}}
                      
     # Contour parameters.
     max_val = 200
@@ -407,6 +409,8 @@ def create_slab2_geom(lon: np.ndarray, lat: np.ndarray, depths: np.ndarray, coor
 
     # Average of valid coordinates.
     mean_coords = np.mean(good_coords, axis=0)
+    if (mean_coords[1] > 180.0):
+        mean_coords[1] -= 360.0
 
     # Rotation info.
     cartesian_coordsys_info['rotation_angle'] = coordsys_rot_angle
@@ -432,8 +436,7 @@ def create_slab2_geom(lon: np.ndarray, lat: np.ndarray, depths: np.ndarray, coor
         # Get local coordinate info.
         LOCAL = "+proj=tmerc +lon_0=" + str(origin_lon) + " lat_0=" + str(origin_lat) + " +k=0.9996" + datum_info
         transWGS84ToLOCAL = Transformer.from_crs(WGS84, LOCAL, always_xy=True)
-        local_trans = CRS.from_string(LOCAL)
-        cartesian_coordsys_info['proj_str'] = local_trans
+        cartesian_coordsys_info['proj_str'] = LOCAL
 
         # Transform to local coordinate system.
         (good_x, good_y) = transWGS84ToLOCAL.transform(good_lons, good_lats)
@@ -446,8 +449,8 @@ def create_slab2_geom(lon: np.ndarray, lat: np.ndarray, depths: np.ndarray, coor
         utm_zone = math.floor((mean_lon + 180)/6) + 1
         utm_south = False if mean_lat >= 0 else True
         LOCAL = CRS.from_dict({'proj': 'utm', 'zone': utm_zone, 'south': utm_south})
-        transWGS84ToLOCAL = Transformer.from_crs(WGS84, local_trans, always_xy=True)
-        local_trans = CRS.from_string(LOCAL)
+        local_trans = CRS.to_string(LOCAL)
+        transWGS84ToLOCAL = Transformer.from_crs(WGS84, LOCAL, always_xy=True)
         cartesian_coordsys_info['proj_str'] = local_trans
 
         # Transform to local coordinate system.
@@ -482,7 +485,148 @@ def create_slab2_geom(lon: np.ndarray, lat: np.ndarray, depths: np.ndarray, coor
         contour_points_rot = contour_points.copy()
         
     return (cartesian_coordsys_info, slab_points_rot, contour_points_rot)
+
+
+def get_interpolated_edge(edge_orig, dist_orig, num_points, ref_ind):
+    """
+    Function to get gridded points along an edge.
+    For now, it appears that dist_orig is not useful.
+    """
+
+    if (ref_ind == 0):
+        xgrid = np.linspace(edge_orig[0,ref_ind], edge_orig[-1, ref_ind], num_points, dtype=np.float64)
+        ygrid = np.interp(xgrid, edge_orig[:,0], edge_orig[:,1])
+        zgrid = np.interp(xgrid, edge_orig[:,0], edge_orig[:,2])
+    elif (ref_ind == 1):
+        ygrid = np.linspace(edge_orig[0,ref_ind], edge_orig[-1, ref_ind], num_points, dtype=np.float64)
+        xgrid = np.interp(ygrid, edge_orig[:,1], edge_orig[:,0])
+        zgrid = np.interp(ygrid, edge_orig[:,1], edge_orig[:,2])
+    elif (ref_ind == 2):
+        zgrid = np.linspace(edge_orig[0,ref_ind], edge_orig[-1, ref_ind], num_points, dtype=np.float64)
+        xgrid = np.interp(zgrid, edge_orig[:,2], edge_orig[:,0])
+        ygrid = np.interp(zgrid, edge_orig[:,2], edge_orig[:,1])
+    else:
+        msg = "Invalid reference index for interpolation."
+        raise ValueError(msg)
+
+    return (xgrid, ygrid, zgrid)
     
+
+def create_local_grid_points_external(points: np.ndarray, edge_sides: dict, external_boundary: np.ndarray, resolution: float=5000.0):
+    """
+    Create a grid of points in local coordinates.Points are interpolated using linear interpolation
+    from the set of points. This version uses an external boundary to define the grid.
+    Returned values are:
+        mesh_points: The computed mesh points in the local coordinate system
+        num_horiz_points: The number of points in the horzontal direction
+        num_vert_points: The number of points in the vertical direction
+    """
+
+    # Edge coordinates.
+    x_bound_min = np.amin(external_boundary[:,0])
+    x_bound_max = np.amax(external_boundary[:,0])
+    y_bound_min = np.amin(external_boundary[:,1])
+    y_bound_max = np.amax(external_boundary[:,1])
+    x_length = x_bound_max - x_bound_min
+    y_length = y_bound_max - y_bound_min
+
+    # Determine number of points in each direction.
+    num_vert_points = int(round(y_length/resolution)) + 1
+    num_horiz_points = int(round(x_length/resolution)) + 1
+    num_points = num_vert_points*num_horiz_points
+
+    # Define grid points.
+    x_grid_range = np.linspace(x_bound_min, x_bound_max, num_horiz_points, dtype=np.float64)
+    y_grid_range = np.linspace(y_bound_min, y_bound_max, num_vert_points, dtype=np.float64)
+    (y_grid, x_grid) = np.meshgrid(y_grid_range, x_grid_range, indexing='ij')
+    grid_coords = np.column_stack((x_grid.flatten(), y_grid.flatten()))
+    z_interp = scipy.interpolate.RBFInterpolator(points[:,0:2], points[:,2], smoothing=0.1, kernel='linear')
+    z_grid = z_interp(grid_coords)
+    mesh_points = np.column_stack((grid_coords, z_grid))
+
+    return (mesh_points, num_horiz_points, num_vert_points)
+    
+
+def create_local_grid_points(points: np.ndarray, edge_sides: dict, resolution: float=5000.0):
+    """
+    Create a grid of points in local coordinates.Points are interpolated using linear interpolation
+    from the set of points.
+    Returned values are:
+        mesh_points: The computed mesh points in the local coordinate system
+        num_horiz_points: The number of points in the horzontal direction
+        num_vert_points: The number of points in the vertical direction
+    """
+
+    # Edge coordinates.
+    left_edge = edge_sides['left_edge']
+    right_edge = edge_sides['right_edge']
+    bottom_edge = edge_sides['bottom_edge']
+    top_edge = edge_sides['top_edge']
+
+    # Determine number of points in each direction.
+    left_diffs = np.diff(left_edge, axis=0, prepend=left_edge[0,:].reshape(1,3))
+    left_length = np.sum(np.linalg.norm(left_diffs, axis=1))
+    left_dist = np.cumsum(np.linalg.norm(left_diffs, axis=1))
+    num_divs_left = left_length/resolution
+
+    right_diffs = np.diff(right_edge, axis=0, prepend=right_edge[0,:].reshape(1,3))
+    right_length = np.sum(np.linalg.norm(right_diffs, axis=1))
+    right_dist = np.cumsum(np.linalg.norm(right_diffs, axis=1))
+    num_divs_right = right_length/resolution
+
+    num_vert_points = int(round(0.5*(num_divs_left + num_divs_right))) + 1
+
+    bottom_diffs = np.diff(bottom_edge, axis=0, prepend=bottom_edge[0,:].reshape(1,3))
+    bottom_length = np.sum(np.linalg.norm(bottom_diffs, axis=1))
+    bottom_dist = np.cumsum(np.linalg.norm(bottom_diffs, axis=1))
+    num_divs_bottom = bottom_length/resolution
+
+    top_diffs = np.diff(top_edge, axis=0, prepend=top_edge[0,:].reshape(1,3))
+    top_length = np.sum(np.linalg.norm(top_diffs, axis=1))
+    top_dist = np.cumsum(np.linalg.norm(top_diffs, axis=1))
+    num_divs_top = top_length/resolution
+
+    num_horiz_points = int(round(0.5*(num_divs_bottom + num_divs_top))) + 1
+    num_points = num_vert_points*num_horiz_points
+
+    # Get interpolated points on edges.
+    (xgrid_left, ygrid_left, zgrid_left) = get_interpolated_edge(left_edge, left_dist, num_vert_points, 1)
+    (xgrid_right, ygrid_right, zgrid_right) = get_interpolated_edge(right_edge, right_dist, num_vert_points, 1)
+    (xgrid_bottom, ygrid_bottom, zgrid_bottom) = get_interpolated_edge(bottom_edge, bottom_dist, num_horiz_points, 0)
+    (xgrid_top, ygrid_top, zgrid_top) = get_interpolated_edge(top_edge, top_dist, num_horiz_points, 0)
+
+    # Create 2D mesh.
+    mesh_points = np.zeros((num_vert_points, num_horiz_points, 3), dtype=np.float64)
+
+    # We need to do this for points on the boundary, which might fall outside interpolation region.
+    z = np.zeros((num_vert_points, num_horiz_points), dtype=np.float64)
+    is_mesh_edge = np.zeros((num_vert_points, num_horiz_points), dtype=bool)
+    is_mesh_edge[0,:] = True
+    is_mesh_edge[-1,:] = True
+    is_mesh_edge[:,0] = True
+    is_mesh_edge[:,-1] = True
+    z[:,0] = zgrid_left
+    z[:,-1] = zgrid_right
+    z[0,:] = zgrid_bottom
+    z[-1,:] = zgrid_top
+    is_not_mesh_edge = ~is_mesh_edge
+    
+    for row_num in range(num_vert_points):
+        mesh_points[row_num,:,0] = np.linspace(xgrid_left[row_num], xgrid_right[row_num], num=num_horiz_points, dtype=np.float64)
+    for col_num in range(num_horiz_points):
+        mesh_points[:,col_num,1] = np.linspace(ygrid_bottom[col_num], ygrid_top[col_num], num=num_vert_points, dtype=np.float64)
+
+    # Interpolate to get z-coordinates.
+    mesh_points = mesh_points.reshape(num_points, 3)
+    interp = scipy.interpolate.LinearNDInterpolator(points[:,0:2], points[:,2])
+    is_mesh_edge = is_mesh_edge.reshape(num_points)
+    is_not_mesh_edge = is_not_mesh_edge.reshape(num_points)
+    z = z.reshape(num_points)
+    mesh_points[is_not_mesh_edge,2] = interp(mesh_points[is_not_mesh_edge,0:2])
+    mesh_points[is_mesh_edge,2] = z[is_mesh_edge]
+
+    return (mesh_points, num_horiz_points, num_vert_points)
+
 
 def create_local_grid_tris(points: np.ndarray, edge_sides: dict, triangles: np.ndarray,
                            fault_is_plane: bool, resolution: float=5000.0, num_search_tris: int=10,

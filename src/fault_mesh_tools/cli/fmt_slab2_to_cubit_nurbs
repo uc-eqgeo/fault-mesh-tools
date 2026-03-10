@@ -13,39 +13,65 @@ import argparse
 import sys
 import pickle
 import pprint
-
 import meshio
 
 from fault_mesh_tools.faultmeshops import faultmeshops
 from fault_mesh_tools.faultmeshio import slab2
 
 # ----------------------------------------------------------------------
-def slab2_to_cubit(in_path, in_corner_path, out_cub, out_path, resolution, min_elevation, coordsys_info):
+def write_cubit_line(f, points):
     """
-    Function to read a Slab 2.0 .grd file and create a quadrilateral mesh of a specified
-    resolution.
+    Write a set of points in Cubit format to create a spline curve.
+    """
+    fmt = ' location %g %g %g'
+    f.write('create curve spline')
+    for point_num in range(points.shape[0]):
+        f.write(fmt % (points[point_num,0], points[point_num,1], points[point_num,2]))
+
+    f.write('\n')
+
+    return
+
+
+def slab2_to_cubit(in_path, in_corner_path, in_external_boundary_path, out_cub, out_journal, out_mesh, out_boundary, out_coordsys,
+                   resolution, min_elevation, read_corners, grid_boundary, transform_to_original, coordsys_info):
+    """
+    Function to read a Slab 2.0 .grd file and create a quadrilateral mesh of a specified resolution.
     """
 
     # Read Slab 2.0 file.
-    (x_in, y_in, vals_in, x_pos_east, y_pos_north) = faultmeshio.slab2.read_slab2(in_path)
+    (x_in, y_in, vals_in, x_pos_east, y_pos_north) = slab2.read_slab2(in_path)
 
     # Get local coordinate info.
     (cartesian_coordsys_info, slab_points, slab_edge) = faultmeshops.create_slab2_geom(x_in, y_in, vals_in, coordsys_info,
                                                                                        min_elevation=min_elevation)
+    # Write boundary mesh.
+    slab2.write_slab2_outline(slab_edge, out_boundary)
+
     # Print coordinate system info.
-    pprint.pprint(cartesian_coordsys_info)
+    c = open(out_coordsys, 'w+')
+    pprint.pprint(cartesian_coordsys_info, stream=c)
 
     # Read corners, if provided.
     corners = None
-    if (read_corners):
-        corners = np.loadtxt(in_corner, delimiter=',', dtype=np.float64)
+    if (read_corners and grid_boundary != "external_boundary"):
+        corners = np.loadtxt(in_corner_path, delimiter=',', dtype=np.float64)
 
     # Get mesh edges.
-    quad_edges = faultmeshops.get_quad_mesh_edges(slab_edge, close_corners=corners, sort_first=sort_first)
+    if (grid_boundary == "elevation"):
+        quad_edges = faultmeshops.get_quad_mesh_edges(slab_edge, close_corners=corners, sort_first=sort_first)
 
-    # Create grid in local coordinates.
-    (mesh_points, num_horiz_points, num_vert_points) = faultmeshops.create_local_grid_points(points, quad_edges, resolution=resolution)
-    mesh_points = mesh_points.reshape(num_vert_points, num_horiz_points, 3)
+        # Create grid in local coordinates.
+        (mesh_points, num_horiz_points, num_vert_points) = faultmeshops.create_local_grid_points(slab_points, quad_edges,
+                                                                                                 resolution=resolution)
+        mesh_points_reshape = mesh_points.reshape(num_vert_points, num_horiz_points, 3)
+    else:
+        external_boundary = np.loadtxt(in_external_boundary_path, delimiter=',', dtype=np.float64)
+        (mesh_points, num_horiz_points, num_vert_points) = \
+            faultmeshops.create_local_grid_points_external(slab_points, slab_edge, external_boundary, resolution=resolution)
+        mesh_points_reshape = mesh_points.reshape(num_vert_points, num_horiz_points, 3)
+        num_edge_points = slab_edge.shape[0]
+        curve_end1 = num_edge_points//2
 
     # Open journal file and create commands.
     f = open(out_journal, 'w')
@@ -53,11 +79,11 @@ def slab2_to_cubit(in_path, in_corner_path, out_cub, out_path, resolution, min_e
 
     # Write u-lines.
     for uline in range(num_vert_points):
-        write_cubit_line(f, mesh_points[uline,:,:])
+        write_cubit_line(f, mesh_points_reshape[uline,:,:])
 
     # Write v-lines.
     for vline in range(num_horiz_points):
-        write_cubit_line(f, mesh_points[:,vline,:])
+        write_cubit_line(f, mesh_points_reshape[:,vline,:])
 
     # Create net surface
     i1 = 1
@@ -66,8 +92,54 @@ def slab2_to_cubit(in_path, in_corner_path, out_cub, out_path, resolution, min_e
     i4 = i2 + num_horiz_points
     f.write('create surface net u curve %d to %d v curve %d to %d\n' % (i1, i2, i3, i4))
     f.write('delete curve all\n')
+
+    # Create cutting volume if using external boundary.
+    if (grid_boundary == "external_boundary"):
+        slab_edge_boundary = slab_edge.copy()
+        z_min = np.amin(slab_edge[:,2]) - 10000.0
+        z_max = np.amax(slab_edge[:,2]) + 10000.0
+        z_extend = z_max - z_min
+        slab_edge_boundary[:,2] = z_min
+
+        # Create bounding curves of surface.
+        write_cubit_line(f, slab_edge_boundary[0:curve_end1 +1,:])
+        f.write("${idCurve1=Id('curve')}\n")
+        write_cubit_line(f, slab_edge_boundary[curve_end1:num_edge_points,:])
+        f.write("${idCurve2=Id('curve')}\n")
+
+        # Create bottom surface.
+        f.write("create surface curve {idCurve1} {idCurve2}\n")
+        f.write("${idSurf=Id('surface')}\n")
+                
+        # Create cutting volume.
+        f.write("sweep surface {idSurf} along vector 0.0 0.0 1.0 distance %f\n" % z_extend)
+        f.write("${idVol=Id('volume')}\n")
+
+        # Webcut volume.
+        f.write("chop volume 1 with volume {idVol}\n")
+
+        # As far as I know, the number of bodies with the chop is indeterminate, so we can't
+        # say which is the outer body that needs to be deleted.
+        f.write("delete body ???\n")
+
+        
+    if (transform_to_original):
+    pprint.pprint(cartesian_coordsys_info, stream=c)
+        if (cartesian_coordsys_info['coordsys_type'] == 'utm'):
+            move_x = cartesian_coordsys_info['origin']['x']
+            move_y = cartesian_coordsys_info['origin']['y']
+            f.write("body all move x %g y %g\n" % (move_x, move_y))
+        if (cartesian_coordsys_info['rotation_angle'] != 0.0):
+            rot_ang = -cartesian_coordsys_info['rotation_angle']
+            f.write("body all rotate %g about z\n" % rot_ang)
     f.write('export Cubit ' + '"' + str(out_cub) + '" overwrite\n')
     f.close()
+
+    # Write mesh file with quadrilateral cells.
+    cellArray = faultmeshops.create_cells_from_dims(num_horiz_points, num_vert_points)
+    cells = [("quad", cellArray)]
+    mesh = meshio.Mesh(mesh_points, cells=cells)
+    meshio.write(out_mesh, mesh)
 
     return
     
@@ -79,8 +151,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate Cubit commands to create NURBS surfaces based on input Slab 2.0 file.')
     parser.add_argument("-i", "--in_file", action="store", dest="in_file", required=True, help="input Slab 2.0 .grd file")
     parser.add_argument("-ic", "--in_corner_file", action="store", dest="in_corner_file", default="corners.txt", help="input corner file")
+    parser.add_argument("-ieb", "--in_external_boundary", action="store", dest="in_external_boundary", default="external_boundary.txt",
+                        help="input external boundary file")
     parser.add_argument("-oj", "--out_journal", action="store", dest="out_journal", required=True, help="output journal file")
-    parser.add_argument("-oc", "--out_cubit", action="store", dest="out_cubit", help="output Cubit file")
+    parser.add_argument("-oc", "--out_cubit", action="store", dest="out_cubit", default="cubit_geom.cub", help="output Cubit geometry file")
+    parser.add_argument("-om", "--out_mesh", action="store", dest="out_mesh", help="output mesh file showing quadrilaterals")
+    parser.add_argument("-ob", "--out_boundary", action="store", dest="out_boundary", help="output slab_boundary file")
+    parser.add_argument("-ocs", "--out_coordsys", action="store", dest="out_coordsys", default="coordsys_info.txt",
+                        help="output file with coordinate system info")
     parser.add_argument("-rc", "--read_corners", action="store_true", dest="read_corners", help="read file defining mesh corners")
     parser.add_argument("-nrc", "--no_read_corners", action="store_false", dest="read_corners",
                         help="do not read file defining mesh corners")
@@ -89,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("-sf", "--sort_first", action="store", dest="sort_first", default="X",
                         help="first sort direction for finding local edges")
     parser.add_argument("-ct", "--cs_type", action="store", dest="cs_type", default='utm', help="type of projected coordinates")
-    parser.add_argument("-co", "--cs_orgin_option", action="store", dest="cs_orgin_option", default='compute_origin',
+    parser.add_argument("-co", "--cs_origin_option", action="store", dest="cs_origin_option", default='compute_origin',
                         help="whether to compute origin coords (compute_origin), use given origin (use_given_origin) or no origin (no_origin)")
     parser.add_argument("-cox", "--cs_origin_x", action="store", dest="cs_origin_x", default=0.0, help="origin x-coordinate")
     parser.add_argument("-coy", "--cs_origin_y", action="store", dest="cs_origin_y", default=0.0, help="origin y-coordinate")
@@ -97,25 +175,38 @@ if __name__ == "__main__":
                         help="precision of computed origin")
     parser.add_argument("-cra", "--cs_rot_angle", action="store", dest="cs_rot_angle", default=0.0, help="rotation angle to apply to coordinates")
     parser.add_argument("-me", "--min_elevation", action="store", dest="min_elevation", default=-70000.0, help="min elevation to use")
-    parser.set_default(read_corners=False)
+    parser.add_argument("-gb", "--grid_boundary", action="store", dest="grid_boundary", default="elevation",
+                        help="method used for boundary grid")
+    parser.add_argument("-to", "--transform_to_original", action="store_true", dest="transform_to_original",
+                        help="transform to orignal coordinates (UTM or tmerc) after creating geometry in Cubit")
+    parser.add_argument("-nto", "--no_transform_to_original", action="store_false", dest="transform_to_original",
+                        help="do not transform to orignal coordinates (UTM or tmerc) after creating geometry in Cubit")
+    parser.set_defaults(read_corners=False)
+    parser.set_defaults(transform_to_original=False)
 
     args = parser.parse_args()
 
     in_path = Path(args.in_file)
     in_corner_path = Path(args.in_corner_file)
-    out_path = Path(args.out_journal)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    in_external_boundary_path = Path(args.in_external_boundary)
+    out_journal = Path(args.out_journal)
+    out_journal.parent.mkdir(parents=True, exist_ok=True)
     out_cub = args.out_cubit
+    out_mesh = args.out_mesh
+    out_boundary = args.out_boundary
+    out_coordsys = args.out_coordsys
     read_corners = args.read_corners
-    resolution = args.resolution
+    transform_to_original = args.transform_to_original
+    resolution = float(args.resolution)
     sort_first = args.sort_first
+    grid_boundary = args.grid_boundary
     cs_type = args.cs_type
     cs_origin_option = args.cs_origin_option
-    cs_origin_x = args.cs_origin_x
-    cs_origin_y = args.cs_origin_y
-    cs_origin_precision = args.cs_origin_precision
-    cs_rot_angle = args.cs_rot_angle
-    min_elevation = args.min_elevation
+    cs_origin_x = float(args.cs_origin_x)
+    cs_origin_y = float(args.cs_origin_y)
+    cs_origin_precision = int(args.cs_origin_precision)
+    cs_rot_angle = float(args.cs_rot_angle)
+    min_elevation = float(args.min_elevation)
 
     cs_origin = {"x": cs_origin_x,
                  "y": cs_origin_y}
@@ -129,6 +220,6 @@ if __name__ == "__main__":
                      "coordsys_origin_precision": cs_origin_precision,
                      "coordsys_rot_angle": cs_rot_angle}
                      
-
-    slab2_to_cubit(in_path, in_corner_path, out_cub, out_path, resolution, min_elevation, coordsys_info)
+    slab2_to_cubit(in_path, in_corner_path, in_external_boundary_path, out_cub, out_journal, out_mesh, out_boundary, out_coordsys,
+                   resolution, min_elevation, read_corners, grid_boundary, transform_to_original, coordsys_info)
     
