@@ -14,7 +14,6 @@ import sys
 import pickle
 import pprint
 import meshio
-import pdb
 
 from fault_mesh_tools.faultmeshops import faultmeshops
 from fault_mesh_tools.faultmeshio import slab2
@@ -184,7 +183,6 @@ if __name__ == "__main__":
                         help="do not transform to orignal coordinates (UTM or tmerc) after creating geometry in Cubit")
     parser.set_defaults(read_corners=False)
     parser.set_defaults(transform_to_original=False)
-    pdb.set_trace()
 
     args = parser.parse_args()
 
