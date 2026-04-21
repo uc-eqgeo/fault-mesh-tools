@@ -14,6 +14,7 @@ import sys
 import pickle
 import pprint
 import meshio
+import pdb
 
 from fault_mesh_tools.faultmeshops import faultmeshops
 from fault_mesh_tools.faultmeshio import slab2
@@ -49,8 +50,8 @@ def slab2_to_cubit(in_path, in_corner_path, in_external_boundary_path, out_cub, 
     slab2.write_slab2_outline(slab_edge, out_boundary)
 
     # Print coordinate system info.
-    c = open(out_coordsys, 'w+')
-    pprint.pprint(cartesian_coordsys_info, stream=c)
+    with open(out_coordsys, 'w') as c:
+        pprint.pprint(cartesian_coordsys_info, stream=c)
 
     # Read corners, if provided.
     corners = None
@@ -120,7 +121,7 @@ def slab2_to_cubit(in_path, in_corner_path, in_external_boundary_path, out_cub, 
 
         # As far as I know, the number of bodies with the chop is indeterminate, so we can't
         # say which is the outer body that needs to be deleted.
-        f.write("# SET BODY NUMBER BELOW TO THE OUTER BODY SURROUNDING THE SUBDUCTION ZONE.\N")
+        f.write("# SET BODY NUMBER BELOW TO THE OUTER BODY SURROUNDING THE SUBDUCTION ZONE.\n")
         f.write("delete body ???\n")
 
         
@@ -183,6 +184,7 @@ if __name__ == "__main__":
                         help="do not transform to orignal coordinates (UTM or tmerc) after creating geometry in Cubit")
     parser.set_defaults(read_corners=False)
     parser.set_defaults(transform_to_original=False)
+    pdb.set_trace()
 
     args = parser.parse_args()
 
