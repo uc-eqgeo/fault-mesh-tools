@@ -17,7 +17,6 @@ import pickle
 import meshio
 
 from fault_mesh_tools.faultmeshops import faultmeshops
-import pdb
 
 # File suffixes and search string.
 md_suffix = '.pkl'
@@ -194,7 +193,6 @@ if __name__ == "__main__":
     parser.set_defaults(tolerant_interpolation=False)
      
     args = parser.parse_args()
-    # pdb.set_trace()
 
     in_path = Path(args.in_files).resolve()
     out_dir = Path(args.out_directory).resolve()
